@@ -68,13 +68,21 @@ func TestClaudeOptions_ToArgs(t *testing.T) {
 			expected: []string{"--chrome"},
 		},
 		{
+			name: "teammate mode only",
+			opts: ClaudeOptions{
+				UseTeammateMode: true,
+			},
+			expected: []string{"--teammate-mode", "tmux"},
+		},
+		{
 			name: "all flags",
 			opts: ClaudeOptions{
 				SessionMode:     "continue",
 				SkipPermissions: true,
 				UseChrome:       true,
+				UseTeammateMode: true,
 			},
-			expected: []string{"-c", "--dangerously-skip-permissions", "--chrome"},
+			expected: []string{"-c", "--dangerously-skip-permissions", "--chrome", "--teammate-mode", "tmux"},
 		},
 	}
 
@@ -121,12 +129,20 @@ func TestClaudeOptions_ToArgsForFork(t *testing.T) {
 			expected: []string{"--chrome"},
 		},
 		{
-			name: "both flags",
+			name: "teammate mode",
+			opts: ClaudeOptions{
+				UseTeammateMode: true,
+			},
+			expected: []string{"--teammate-mode", "tmux"},
+		},
+		{
+			name: "all flags",
 			opts: ClaudeOptions{
 				SkipPermissions: true,
 				UseChrome:       true,
+				UseTeammateMode: true,
 			},
-			expected: []string{"--dangerously-skip-permissions", "--chrome"},
+			expected: []string{"--dangerously-skip-permissions", "--chrome", "--teammate-mode", "tmux"},
 		},
 	}
 
@@ -223,6 +239,7 @@ func TestUnmarshalClaudeOptions(t *testing.T) {
 		ResumeSessionID: "test-session-123",
 		SkipPermissions: true,
 		UseChrome:       true,
+		UseTeammateMode: true,
 	}
 
 	data, err := MarshalToolOptions(opts)
@@ -247,6 +264,9 @@ func TestUnmarshalClaudeOptions(t *testing.T) {
 	}
 	if !result.UseChrome {
 		t.Error("expected UseChrome=true")
+	}
+	if !result.UseTeammateMode {
+		t.Error("expected UseTeammateMode=true")
 	}
 }
 
@@ -292,6 +312,7 @@ func TestClaudeOptions_RoundTrip(t *testing.T) {
 		ResumeSessionID: "session-abc-123",
 		SkipPermissions: true,
 		UseChrome:       true,
+		UseTeammateMode: true,
 	}
 
 	// Marshal

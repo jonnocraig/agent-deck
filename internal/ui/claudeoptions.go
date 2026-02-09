@@ -17,6 +17,7 @@ type ClaudeOptionsPanel struct {
 	// Checkbox states
 	skipPermissions bool
 	useChrome       bool
+	useTeammateMode bool
 	// Focus tracking
 	focusIndex int
 	// Whether this panel is for fork dialog (fewer options)
@@ -46,7 +47,7 @@ func NewClaudeOptionsPanel() *ClaudeOptionsPanel {
 		sessionMode:   0, // new
 		resumeIDInput: resumeInput,
 		isForkMode:    false,
-		focusCount:    4, // Will adjust dynamically
+		focusCount:    5, // Will adjust dynamically
 	}
 }
 
@@ -56,7 +57,7 @@ func NewClaudeOptionsPanelForFork() *ClaudeOptionsPanel {
 		sessionMode:   0,
 		resumeIDInput: textinput.New(), // Not used in fork mode
 		isForkMode:    true,
-		focusCount:    2, // skip, chrome
+		focusCount:    3, // skip, chrome, teammate
 	}
 }
 
@@ -88,6 +89,7 @@ func (p *ClaudeOptionsPanel) GetOptions() *session.ClaudeOptions {
 	opts := &session.ClaudeOptions{
 		SkipPermissions: p.skipPermissions,
 		UseChrome:       p.useChrome,
+		UseTeammateMode: p.useTeammateMode,
 	}
 
 	if !p.isForkMode {
@@ -178,6 +180,8 @@ func (p *ClaudeOptionsPanel) handleSpaceKey() {
 			p.skipPermissions = !p.skipPermissions
 		case 1:
 			p.useChrome = !p.useChrome
+		case 2:
+			p.useTeammateMode = !p.useTeammateMode
 		}
 	} else {
 		// NewDialog mode
@@ -189,6 +193,8 @@ func (p *ClaudeOptionsPanel) handleSpaceKey() {
 			p.skipPermissions = !p.skipPermissions
 		case "chrome":
 			p.useChrome = !p.useChrome
+		case "teammateMode":
+			p.useTeammateMode = !p.useTeammateMode
 		}
 	}
 }
@@ -201,6 +207,8 @@ func (p *ClaudeOptionsPanel) getFocusType() string {
 			return "skipPermissions"
 		case 1:
 			return "chrome"
+		case 2:
+			return "teammateMode"
 		}
 	} else {
 		idx := p.focusIndex
@@ -223,6 +231,10 @@ func (p *ClaudeOptionsPanel) getFocusType() string {
 		if idx == 2 {
 			return "chrome"
 		}
+		// 4: teammate mode
+		if idx == 3 {
+			return "teammateMode"
+		}
 	}
 	return ""
 }
@@ -230,10 +242,10 @@ func (p *ClaudeOptionsPanel) getFocusType() string {
 // getFocusCount returns the number of focusable elements
 func (p *ClaudeOptionsPanel) getFocusCount() int {
 	if p.isForkMode {
-		return 2 // skip, chrome
+		return 3 // skip, chrome, teammate
 	}
 
-	count := 3 // session mode, skip, chrome
+	count := 4 // session mode, skip, chrome, teammate
 	if p.sessionMode == 2 {
 		count++ // resume input
 	}
@@ -293,6 +305,14 @@ func (p *ClaudeOptionsPanel) viewForkMode(labelStyle, activeStyle, dimStyle, hea
 		content += "  " + checkbox + " " + labelStyle.Render("Chrome mode") + "\n"
 	}
 
+	// Teammate mode checkbox
+	checkbox = p.renderCheckbox(p.useTeammateMode, p.focusIndex == 2)
+	if p.focusIndex == 2 {
+		content += activeStyle.Render("▶ ") + checkbox + " Teammate mode\n"
+	} else {
+		content += "  " + checkbox + " " + labelStyle.Render("Teammate mode") + "\n"
+	}
+
 	return content
 }
 
@@ -338,6 +358,15 @@ func (p *ClaudeOptionsPanel) viewNewMode(labelStyle, activeStyle, dimStyle, head
 		content += activeStyle.Render("▶ ") + checkbox + " Chrome mode\n"
 	} else {
 		content += "  " + checkbox + " " + labelStyle.Render("Chrome mode") + "\n"
+	}
+	focusIdx++
+
+	// Teammate mode checkbox
+	checkbox = p.renderCheckbox(p.useTeammateMode, p.focusIndex == focusIdx)
+	if p.focusIndex == focusIdx {
+		content += activeStyle.Render("▶ ") + checkbox + " Teammate mode\n"
+	} else {
+		content += "  " + checkbox + " " + labelStyle.Render("Teammate mode") + "\n"
 	}
 
 	return content
