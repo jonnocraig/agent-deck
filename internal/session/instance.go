@@ -1107,6 +1107,14 @@ func (i *Instance) Start() error {
 		return fmt.Errorf("tmux session not initialized")
 	}
 
+	// Generate/merge .mcp.json from config.toml before launching
+	// Ensures MCP tools are available from the first session start, not just on restart
+	if i.Tool == "claude" {
+		if err := i.regenerateMCPConfig(); err != nil {
+			sessionLog.Warn("start_mcp_regen_failed", slog.String("error", err.Error()))
+		}
+	}
+
 	// Build command based on tool type
 	// Priority: built-in tools (claude, gemini, opencode, codex) → custom tools from config.toml → raw command
 	var command string
@@ -1191,6 +1199,14 @@ func (i *Instance) Start() error {
 func (i *Instance) StartWithMessage(message string) error {
 	if i.tmuxSession == nil {
 		return fmt.Errorf("tmux session not initialized")
+	}
+
+	// Generate/merge .mcp.json from config.toml before launching
+	// Ensures MCP tools are available from the first session start, not just on restart
+	if i.Tool == "claude" {
+		if err := i.regenerateMCPConfig(); err != nil {
+			sessionLog.Warn("start_mcp_regen_failed", slog.String("error", err.Error()))
+		}
 	}
 
 	// Start session normally (no embedded message logic)
