@@ -2,33 +2,25 @@
 
 ## In Progress
 
-- [ ] Vagrant Mode ("Just Do It") feature -- plan enriched, awaiting implementation
+- [ ] Vagrant Mode ("Just Do It") feature -- plan reviewed and amended, awaiting implementation
 
-## Completed This Session
+## Completed This Session (Session 5)
 
-- [x] Multi-model design review with Gemini 3 Pro + GPT 5.1 Codex -- 22 issues identified
-- [x] Issue #1: MCP network binding -- replaced URL rewriting with SSH reverse tunnels (-R)
-- [x] Issue #2: Env var transport -- replaced inline vars with SSH SendEnv/AcceptEnv
-- [x] Issue #3: Race condition async suspend/start -- goroutine + done channel + spinner
-- [x] Issue #4: SSH agent forwarding -- config.ssh.forward_agent = true
-- [x] Issue #5: No boot progress -- phase parser + 100 loading tips (50 Vagrant + 50 world facts)
-- [x] Issue #6: Health check misses hangs -- two-phase: status + SSH liveness probe
-- [x] Issue #7: Docker nested virt -- --nested-hw-virt on
-- [x] Issue #8: Multiple sessions per project -- prompt: share VM or create separate VM
-- [x] Issue #9: Stale suspended VMs -- warning at 3+ + Shift+D cleanup dialog
-- [x] Issue #10: Health check interval -- 60s to 30s
-- [x] Issue #11: No disk space preflight -- block <5GB, warn 5-10GB
-- [x] Issue #12: No VirtualBox check -- combined preflight (Vagrant + VBox + disk)
-- [x] Issue #13: Port forwarding collisions -- auto_correct: true
-- [x] Issue #14: provision_packages replaces -- changed to append + exclude
-- [x] Issue #15: inotify broken on VBox sync -- polling env vars + skill guidance
-- [x] Issue #16: Apple Silicon kext approval -- stderr parsing + System Settings guidance
-- [x] Issue #17: Missing hostname -- auto-set agentdeck-<project>
-- [x] Issue #18: No Windows support -- documented as unsupported v1
-- [x] Issue #19: Enterprise proxy -- auto-forward host proxy vars + docs
-- [x] Issue #20: Credential leakage -- skill warning + PreToolUse hook + rsync exclude
-- [x] Issue #21: No box update path -- config hash + auto re-provision
-- [x] Issue #22: CI testing needs interface -- VagrantProvider interface + mock
+- [x] Multi-model consensus review of plan vs design doc with Gemini 3 Pro + GPT 5.2
+- [x] C1: Split manager.go into 9 concern-separated files to eliminate Wave 2/3 file contention
+- [x] C2: Split Wave 3 file targets (wrap.go, sync.go) for parallel safety
+- [x] C3: Fixed Wave 4 dependency chain -- serialized instance.go edits (4.1 -> [4.2,4.3,4.4] -> 4.5)
+- [x] G1: Added task-6.10 for documentation (config-reference.md + README)
+- [x] G2: Explicit AutoSuspend/AutoDestroy gating + toast surfacing in task-4.1
+- [x] G3: HealthCheckInterval read from config (not hardcoded) in task-4.3
+- [x] G4: Fixed 60s->30s TTL inconsistency across 4 locations in design doc
+- [x] G5: task-5.3 now updates session status after VM destruction
+- [x] G6: Wave 6 test tasks reference correct split files
+- [x] O1: Moved task-3.3 (tips) to Wave 1 -- no dependencies, pure data
+- [x] O2: Moved task-5.1 (checkbox) to Wave 2 -- only depends on Wave 1
+- [x] Updated meta: 34 tasks, max parallelism 10, avg 5.7
+- [x] Validated JSON + cross-referenced all wave/task/dependency/phase relationships (0 errors)
+- [x] Regenerated MD plan from JSON (727 lines)
 
 ## Completed Previous Sessions
 
@@ -41,10 +33,8 @@
 - [x] Created feature/vagrant branch and pushed to origin
 - [x] Copied agentic-ai skills to global ~/.claude/skills/
 - [x] Pushed skills to skeleton repo on feature/agentic-ai-skills branch
-
-## Completed This Session (Session 4)
-
-- [x] Created implementation plan using `agentic-ai-plan` skill -- 27 tasks, 6 waves, 3 output files (JSON/MD/XML)
+- [x] Multi-model design review with Gemini 3 Pro + GPT 5.1 Codex -- 22 issues amended
+- [x] Created implementation plan using `agentic-ai-plan` skill -- 27 tasks, 6 waves, 3 output files
 
 ## Pending
 

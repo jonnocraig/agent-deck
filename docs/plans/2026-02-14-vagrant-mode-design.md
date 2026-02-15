@@ -144,7 +144,7 @@ instance.Delete()--> tmux kill --> VagrantManager.Destroy() (async goroutine, si
 instance.Start() --> if vmOpInFlight: wait on done channel (show "Waiting for VM...")
                      timeout after 60s → error
 
-UpdateStatus() ─── every 60s ──→ VagrantManager.HealthCheck()
+UpdateStatus() ─── every 30s (configurable) ──→ VagrantManager.HealthCheck()
                                   |
                                   +--→ VM aborted/poweroff → StatusError + "VM crashed"
                                   +--→ VM running → no action
@@ -185,7 +185,7 @@ func (m *Manager) WrapCommand(cmd string, envVarNames []string, tunnelPorts []in
 func (m *Manager) EnsureVagrantfile() error   // generate if missing, includes MCP npm packages
 func (m *Manager) EnsureSudoSkill() error     // write skill to project
 func (m *Manager) Status() (string, error)    // running/suspended/not_created/aborted/poweroff
-func (m *Manager) HealthCheck() (VMHealth, error) // cached status check, 60s TTL
+func (m *Manager) HealthCheck() (VMHealth, error) // cached status check, 30s TTL
 func (m *Manager) GetMCPPackages() []string   // extract npm packages from config.toml MCPs
 func (m *Manager) SyncClaudeConfig() error    // copy host Claude configs to VM with URL rewrites
 func (m *Manager) RegisterSession(sessionID string)    // track session sharing this VM
@@ -233,7 +233,7 @@ func GetVagrantSudoSkill() string // returns skill markdown
 - Sets env var values in subprocess environment, passes names and tunnel ports to `WrapCommand()`
 - Suspend hook in Stop(), Destroy hook in Delete() — both run in goroutines, signal `vmOpDone` channel
 - Start() waits on `vmOpDone` if an operation is in-flight, with 60s timeout and TUI spinner
-- `UpdateStatus()` extended: periodic VM health check (60s interval) for vagrant sessions
+- `UpdateStatus()` extended: periodic VM health check (configurable interval, default 30s) for vagrant sessions
 - New fields: `vagrantProvider` (interface), `lastVMHealthCheck`, `cleanShutdown`, `vmOpDone chan struct{}`, `vmOpInFlight atomic.Bool`
 - Contextual error messages for VM crash states (aborted, poweroff, not_created)
 
@@ -823,7 +823,7 @@ This adjusts the space estimate — first-time users need ~2GB more than returni
 | Suspend fails | Warning logged, non-blocking. vmOpDone channel still signaled. |
 | Destroy fails | Warning logged, session deleted anyway. vmOpDone channel still signaled. |
 | Start races with in-flight suspend | Start waits on vmOpDone channel, shows "Waiting for VM to finish suspending..." spinner. 60s timeout. |
-| VM crashes (OOM/panic) | Health check detects within 60s. StatusError + contextual message. Press R to recover. |
+| VM crashes (OOM/panic) | Health check detects within 30s (one health_check_interval). StatusError + contextual message. Press R to recover. |
 | VirtualBox crashes | Same as VM crash. `vagrant status` shows "aborted". |
 | agent-deck crashes | Automatic recovery on restart via tmux reconnection. No action needed. |
 | Host reboots | Press R: `vagrant up` recreates VM, Claude resumes via session ID. |

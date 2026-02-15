@@ -71,3 +71,9 @@
 **Context**: Windows has different path handling, SSH clients, and no `syscall.Statfs`.
 **Decision**: Document Windows as unsupported. macOS and Linux only.
 **Consequences**: Reduced scope. Windows support may be added later.
+
+## 2026-02-15 - Split manager.go Into Concern-Separated Files
+
+**Context**: Multi-model consensus review (Gemini 3 Pro + GPT 5.2) identified that Wave 2 had 6 tasks all targeting `manager.go`, which would cause merge conflicts when parallel agents edit the same file.
+**Decision**: Split manager.go methods into 9 dedicated files: `vagrantfile.go`, `bootphase.go`, `preflight.go`, `health.go`, `drift.go`, `sessions.go`, `wrap.go`, `sync.go`. Each file contains a cohesive set of Manager methods. `manager.go` retains only struct definition, constructor, and core lifecycle (Up/Suspend/Destroy/Status).
+**Consequences**: All Wave 2 and Wave 3 tasks now target unique files. Zero file contention in parallel execution. Each file gets its own `_test.go`. Wave 4 still requires serialization (all touch `instance.go`).
