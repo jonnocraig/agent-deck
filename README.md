@@ -208,6 +208,53 @@ Both Telegram and Slack can run simultaneously — the bridge daemon handles bot
 
 **Heartbeat**: Conductors with heartbeat enabled receive periodic check-in prompts, keeping them actively monitoring your sessions. Disable per conductor with `--no-heartbeat`.
 
+### Vagrant Mode
+
+Run Agent Deck sessions inside isolated VirtualBox VMs for unrestricted access, full Linux environments, and complete separation from your host system.
+
+**What it does:**
+- Creates isolated Ubuntu 24.04 VMs (or any Vagrant box)
+- Sessions run with full VM control (no permission restrictions)
+- Mounts your project directory for editing/running code
+- Auto-suspend or auto-destroy on session cleanup
+- Port forwarding for web apps, databases, and services
+
+**Prerequisites:**
+- Vagrant 2.4+
+- VirtualBox 7.0+ (on Intel/AMD) or UTM (on Apple Silicon)
+- 4+ GB free disk space (per VM)
+- A few extra minutes for first boot
+
+**How to enable:**
+1. Launch Agent Deck TUI: `agent-deck`
+2. Create a new session with `n`
+3. When asked "Execution mode", select **"Just do it (vagrant sudo)"**
+
+Agent Deck automatically creates and manages the VM for that session.
+
+**Configuration:**
+All Vagrant settings go in `~/.agent-deck/config.toml` under `[vagrant]`:
+
+```toml
+[vagrant]
+memory_mb = 8192              # VM RAM
+cpus = 4                      # vCPUs
+npm_packages = ["typescript"] # Global npm packages to install
+auto_suspend = true           # Suspend VM when session stops
+```
+
+See [Configuration Reference](skills/agent-deck/references/config-reference.md#vagrant-section) for all options including custom provisioning scripts, port forwarding, and environment variables.
+
+**Troubleshooting:**
+
+| Issue | Solution |
+|-------|----------|
+| First VM takes 5+ minutes | Normal on first boot (imports box, sets up VM). Subsequent boots are faster. |
+| Apple Silicon kext errors | Use UTM instead of VirtualBox. Install Vagrant UTM provider: `vagrant plugin install vagrant-utm` |
+| "Not enough disk space" | Each VM needs 20-40GB. Check `df -h` and clean up if needed. |
+| "SSH timeout" | Vagrant box taking too long to start. Check `vagrant status` inside `~/.agent-deck/vagrant/` |
+| Port forwarding not working | Ensure firewall allows connections to host ports. Check `vagrant port` inside VM directory. |
+
 ### Multi-Tool Support
 
 Agent Deck works with any terminal-based AI tool:

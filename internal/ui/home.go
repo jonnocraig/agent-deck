@@ -151,6 +151,7 @@ type Home struct {
 	geminiModelDialog    *GeminiModelDialog    // For selecting Gemini model
 	sessionPickerDialog  *SessionPickerDialog  // For sending output to another session
 	worktreeFinishDialog *WorktreeFinishDialog // For finishing worktree sessions (merge + cleanup)
+	cleanupDialog        *CleanupDialog        // For cleaning up stale suspended VMs
 
 	// Analytics cache (async fetching with TTL)
 	currentAnalytics       *session.SessionAnalytics                  // Current analytics for selected session (Claude)
@@ -453,6 +454,16 @@ type worktreeFinishResultMsg struct {
 	err          error
 }
 
+type staleVMsLoadedMsg struct {
+	vms []StaleVM
+	err error
+}
+
+type vmCleanupResultMsg struct {
+	destroyed []StaleVM
+	errors    []error
+}
+
 // statusUpdateRequest is sent to the background worker with current viewport info
 type statusUpdateRequest struct {
 	viewOffset    int      // Current scroll position
@@ -517,6 +528,7 @@ func NewHomeWithProfileAndMode(profile string) *Home {
 		geminiModelDialog:    NewGeminiModelDialog(),
 		sessionPickerDialog:  NewSessionPickerDialog(),
 		worktreeFinishDialog: NewWorktreeFinishDialog(),
+		cleanupDialog:        NewCleanupDialog(),
 		cursor:               0,
 		initialLoading:       true, // Show splash until sessions load
 		ctx:                  ctx,
@@ -2946,6 +2958,27 @@ func (h *Home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h.setError(fmt.Errorf("%s", successMsg))
 		return h, nil
 
+	case staleVMsLoadedMsg:
+		if msg.err != nil {
+			h.setError(msg.err)
+			return h, nil
+		}
+		h.cleanupDialog.SetVMs(msg.vms)
+		h.cleanupDialog.Show()
+		return h, nil
+
+	case vmCleanupResultMsg:
+		h.cleanupDialog.Hide()
+		if len(msg.errors) > 0 {
+			// Show first error
+			h.setError(msg.errors[0])
+		} else {
+			// Show success message
+			count := len(msg.destroyed)
+			h.setError(fmt.Errorf("Destroyed %d VM(s)", count))
+		}
+		return h, nil
+
 	case copyResultMsg:
 		if msg.err != nil {
 			h.setError(msg.err)
@@ -3952,6 +3985,11 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "N":
 		// Quick create: auto-generated name, smart defaults from group context
 		return h, h.quickCreateSession()
+
+	case "D":
+		// Stale VM cleanup dialog (Shift+D)
+		h.cleanupDialog.SetSize(h.width, h.height)
+		return h, h.loadStaleVMs()
 
 	case "d":
 		// Show confirmation dialog before deletion (prevents accidental deletion)
@@ -5397,6 +5435,8 @@ func (h *Home) updateSizes() {
 	h.confirmDialog.SetSize(h.width, h.height)
 	h.geminiModelDialog.SetSize(h.width, h.height)
 	h.worktreeFinishDialog.SetSize(h.width, h.height)
+	h.cleanupDialog.SetSize(h.width, h.height)
+	h.cleanupDialog.SetSize(h.width, h.height)
 }
 
 // View renders the UI
@@ -8543,4 +8583,68 @@ func getSessionContent(inst *session.Instance) (string, error) {
 	}
 
 	return content, nil
+}
+
+// loadStaleVMs loads stale suspended VMs in the background.
+func (h *Home) loadStaleVMs() tea.Cmd {
+	return func() tea.Msg {
+		vms, err := ListSuspendedAgentDeckVMs()
+		return staleVMsLoadedMsg{
+			vms: vms,
+			err: err,
+		}
+	}
+}
+
+// handleCleanupDialogKey processes key events for the cleanup dialog.
+func (h *Home) handleCleanupDialogKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "enter":
+		// Get selected VMs and start destruction
+		selectedVMs := h.cleanupDialog.GetSelectedVMs()
+		if len(selectedVMs) == 0 {
+			h.cleanupDialog.SetError("No VMs selected")
+			return h, nil
+		}
+
+		h.cleanupDialog.SetDestroying(true)
+		h.cleanupDialog.SetDestroyProgress("Destroying VMs...")
+
+		return h, h.destroyVMs(selectedVMs)
+
+	case "esc":
+		h.cleanupDialog.Hide()
+		return h, nil
+
+	default:
+		// Forward to dialog
+		d, cmd := h.cleanupDialog.Update(msg)
+		h.cleanupDialog = d
+		return h, cmd
+	}
+}
+
+// destroyVMs destroys the selected VMs asynchronously.
+func (h *Home) destroyVMs(vms []StaleVM) tea.Cmd {
+	return func() tea.Msg {
+		errors := DestroySuspendedVMs(vms)
+		destroyed := []StaleVM{}
+
+		// Track which VMs were successfully destroyed
+		if len(errors) == 0 {
+			destroyed = vms
+		} else {
+			// Some succeeded, some failed - calculate which succeeded
+			for i := range vms {
+				if i >= len(errors) || errors[i] == nil {
+					destroyed = append(destroyed, vms[i])
+				}
+			}
+		}
+
+		return vmCleanupResultMsg{
+			destroyed: destroyed,
+			errors:    errors,
+		}
+	}
 }

@@ -131,12 +131,17 @@ type Instance struct {
 	SkipMCPRegenerate bool `json:"-"` // Don't persist, transient flag
 
 	// Vagrant mode integration
-	vagrantProvider   VagrantVM    `json:"-"` // Interface for VM lifecycle (nil when not vagrant mode)
-	lastVMHealthCheck time.Time    `json:"-"` // When we last ran VM health check
-	cleanShutdown     bool         `json:"-"` // Set to true on graceful Stop/Suspend
-	vmOpDone          chan struct{} `json:"-"` // Signals VM operation completion
-	vmOpInFlight      atomic.Bool  `json:"-"` // True when async VM op running
-	VagrantSeparateVM bool         `json:"vagrant_separate_vm,omitempty"` // True if this session uses a dedicated VM (vs shared)
+	vagrantProvider    VagrantVM    `json:"-"` // Interface for VM lifecycle (nil when not vagrant mode)
+	lastVMHealthCheck  time.Time    `json:"-"` // When we last ran VM health check
+	cleanShutdown      bool         `json:"-"` // Set to true on graceful Stop/Suspend
+	vmOpDone           chan struct{} `json:"-"` // Signals VM operation completion
+	vmOpInFlight       atomic.Bool  `json:"-"` // True when async VM op running
+	VagrantSeparateVM  bool         `json:"vagrant_separate_vm,omitempty"` // True if this session uses a dedicated VM (vs shared)
+	VagrantBootPhase   string       `json:"-"` // Current boot phase (transient, for UI display)
+	VagrantBootStarted time.Time    `json:"-"` // When boot started (transient, for elapsed timer)
+
+	// Error tracking
+	ErrorMessage string `json:"-"` // Detailed error message for display (not persisted)
 }
 
 // IsVagrantMode returns true if this instance has vagrant mode enabled.
@@ -1100,6 +1105,20 @@ func (i *Instance) getEnabledMCPNames() []string {
 	return mcpInfo.AllNames()
 }
 
+// extractErrorMessage extracts the first line of an error message for display.
+// Used to show concise error information in the UI without overwhelming detail.
+func extractErrorMessage(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := err.Error()
+	// Extract only the first line
+	if idx := strings.Index(msg, "\n"); idx != -1 {
+		msg = msg[:idx]
+	}
+	return msg
+}
+
 // applyVagrantWrapper sets up the vagrant VM and wraps the command for execution inside it.
 // Called during Start()/StartWithMessage() when vagrant mode is enabled.
 // Performs: preflight -> vagrantfile -> sudo skill -> ensureRunning -> MCP config -> sync -> wrap command
@@ -1121,11 +1140,15 @@ func (i *Instance) applyVagrantWrapper(command string) (string, error) {
 
 	// 1. Preflight checks (disk space, VirtualBox version)
 	if err := i.vagrantProvider.PreflightCheck(); err != nil {
+		i.ErrorMessage = extractErrorMessage(err)
+		i.Status = StatusError
 		return "", fmt.Errorf("vagrant preflight failed: %w", err)
 	}
 
 	// 2. Generate Vagrantfile
 	if err := i.vagrantProvider.EnsureVagrantfile(); err != nil {
+		i.ErrorMessage = extractErrorMessage(err)
+		i.Status = StatusError
 		return "", fmt.Errorf("vagrant: failed to generate Vagrantfile: %w", err)
 	}
 
@@ -1141,9 +1164,15 @@ func (i *Instance) applyVagrantWrapper(command string) (string, error) {
 		if i.VagrantSeparateVM {
 			// Separate VM mode: use a unique VAGRANT_DOTFILE_PATH
 			i.vagrantProvider.SetDotfilePath(i.ID)
+			i.VagrantBootPhase = "Booting VM..."
+			i.VagrantBootStarted = time.Now()
 			if err := i.vagrantProvider.Boot(); err != nil {
+				i.VagrantBootPhase = ""
+				i.ErrorMessage = extractErrorMessage(err)
+				i.Status = StatusError
 				return "", fmt.Errorf("vagrant: failed to start separate VM: %w", err)
 			}
+			i.VagrantBootPhase = ""
 		}
 		// Share mode (default): VM already running, skip Boot()
 		// Just register and proceed to config/sync steps
@@ -1152,9 +1181,15 @@ func (i *Instance) applyVagrantWrapper(command string) (string, error) {
 		if i.VagrantSeparateVM {
 			i.vagrantProvider.SetDotfilePath(i.ID)
 		}
+		i.VagrantBootPhase = "Booting VM..."
+		i.VagrantBootStarted = time.Now()
 		if err := i.vagrantProvider.Boot(); err != nil {
+			i.VagrantBootPhase = ""
+			i.ErrorMessage = extractErrorMessage(err)
+			i.Status = StatusError
 			return "", fmt.Errorf("vagrant: failed to start VM: %w", err)
 		}
+		i.VagrantBootPhase = ""
 	}
 
 	// 5. Write config hash for drift detection

@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/asheshgoplani/agent-deck/internal/session"
 )
@@ -125,9 +126,27 @@ func (l *List) View() string {
 				status := StatusIndicator(string(inst.Status))
 				icon := ToolIcon(inst.Tool)
 
-				line := style.Render(prefix + icon + " " + inst.Title + " " + status)
-				b.WriteString(line)
-				b.WriteString("\n")
+				// Check for error message first (highest priority)
+				line := ""
+				if inst.Status == session.StatusError && inst.ErrorMessage != "" {
+					line = style.Render(prefix + icon + " " + inst.Title + " " + status)
+					b.WriteString(line)
+					b.WriteString("\n")
+					// Show error message on next line, indented
+					errorStyle := ErrorMessageStyle
+					b.WriteString(errorStyle.Render("    " + inst.ErrorMessage))
+					b.WriteString("\n")
+				} else if inst.IsVagrantMode() && inst.VagrantBootPhase != "" {
+					// Check for vagrant boot progress
+					elapsed := formatElapsed(inst.VagrantBootStarted)
+					line = style.Render(prefix + icon + " " + inst.Title + " ⟳ " + inst.VagrantBootPhase + " (" + elapsed + ")")
+					b.WriteString(line)
+					b.WriteString("\n")
+				} else {
+					line = style.Render(prefix + icon + " " + inst.Title + " " + status)
+					b.WriteString(line)
+					b.WriteString("\n")
+				}
 				itemIndex++
 			}
 		} else {
@@ -137,4 +156,19 @@ func (l *List) View() string {
 	}
 
 	return b.String()
+}
+
+// formatElapsed formats elapsed time since start in "Xm Ys" format
+func formatElapsed(start time.Time) string {
+	if start.IsZero() {
+		return "0s"
+	}
+	elapsed := time.Since(start)
+	minutes := int(elapsed.Minutes())
+	seconds := int(elapsed.Seconds()) % 60
+
+	if minutes > 0 {
+		return fmt.Sprintf("%dm %ds", minutes, seconds)
+	}
+	return fmt.Sprintf("%ds", seconds)
 }
