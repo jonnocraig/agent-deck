@@ -1,39 +1,31 @@
-# Session Handoff - 2026-02-14 (Session 3)
+# Session Handoff - 2026-02-15 (Session 4)
 
 ## What Was Accomplished
 
-- Multi-model design review of Vagrant Mode design doc using Gemini 3 Pro + GPT 5.1 Codex (GPT 5.2 had connection errors)
-- Synthesized 22 issues from three perspectives (mine, Gemini, GPT), prioritized by severity
-- Worked through ALL 22 issues sequentially with user, amending design doc for each:
-  - #1 SSH reverse tunnels for MCP network binding
-  - #2 SSH SendEnv/AcceptEnv for env var transport
-  - #3 Goroutine + done channel for async suspend/start race condition
-  - #4 SSH agent forwarding for git push
-  - #5 Boot phase parser + 100 loading tips (50 Vagrant + 50 world facts, researched by background agents)
-  - #6 Two-phase health check with SSH liveness probe
-  - #7 Nested virtualization for Docker-in-VM
-  - #8 Multi-session prompt: share VM or create separate VM
-  - #9 Stale VM warning (3+ threshold) + Shift+D cleanup dialog
-  - #10 Health check interval 60s -> 30s
-  - #11 Disk space preflight (block <5GB, warn 5-10GB)
-  - #12 Combined preflight (Vagrant + VirtualBox version + disk)
-  - #13 Port forwarding auto_correct: true
-  - #14 provision_packages append semantics + exclude list
-  - #15 inotify polling env vars auto-injected + skill guidance
-  - #16 Apple Silicon kernel extension stderr detection
-  - #17 Auto-hostname from project name
-  - #18 Windows documented as unsupported
-  - #19 Proxy env var auto-forwarding + docs
-  - #20 Credential guard: skill + PreToolUse hook + rsync exclude
-  - #21 Config hash + auto re-provision on drift
-  - #22 VagrantProvider interface for CI testability
-- Design doc grew from ~960 lines to ~2000 lines
+- Enriched Vagrant Mode design doc into agent team execution plan using `agentic-ai-plan` skill
+- Parsed ~2000-line design doc, extracted 27 implementation tasks across 6 phases
+- Built dependency graph and topological sort into 6 execution waves
+- Each task enriched with: model selection, agents, MCP tools, skills, permissions, complexity, wave assignment
+- Generated 3 output files:
+  - `.claude/plans/agent-teams/2026-02-14-vagrant-mode-agent-plan.json` (88KB, source of truth)
+  - `.claude/plans/agent-teams/2026-02-14-vagrant-mode-agent-plan.md` (30KB, human-readable)
+  - `.claude/plans/agent-teams/2026-02-14-vagrant-mode-agent-plan.xml` (24KB, structured)
+
+## Plan Summary
+
+- **27 tasks** across 6 phases (Foundation, Core Manager, MCP/Skill, Instance Lifecycle, UI, Testing)
+- **6 waves** with user checkpoints between each
+- **Model allocation**: 1 opus, 17 sonnet, 9 haiku
+- **Critical path**: 6 tasks
+- **Max parallelism**: 9, average: 4.5x
+- **Wave 2** achieves max parallelism (7 tasks) — all Core Manager tasks touch different parts of manager.go
+- **Wave 4 bottleneck**: task 4.1 (instance lifecycle hooks, opus) blocks 4.2, 4.3, and 4.5
 
 ## Current State
 
 - Branch: `feature/vagrant` (based on upstream/main v0.16.0)
-- Last commit: `47e1d20` — "feat: enrich vagrant mode design doc and generate MCP config on session start"
-- Uncommitted changes: design doc + plan files (need to commit)
+- Last commit: `925f0e2` — "feat: complete multi-model design review — 22 issues amended to vagrant mode design"
+- Plan files in `.claude/plans/agent-teams/` (committed this session)
 - Design doc: `docs/plans/2026-02-14-vagrant-mode-design.md` (~2000 lines, fully reviewed)
 
 ## Open Issues
@@ -44,15 +36,15 @@
 ## Next Steps (in order)
 
 1. Run `/catchup` to restore context in new session
-2. Create implementation plan using `agentic-ai-plan` skill
-3. Set up git worktree for isolated implementation
-4. Execute plan with agent team using `agentic-ai-implement`
-5. Create PR for `feature/vagrant` -> upstream
-6. Create PR for skeleton repo `feature/agentic-ai-skills` branch
+2. Set up git worktree for isolated implementation
+3. Execute plan with agent team using `agentic-ai-implement`
+4. Create PR for `feature/vagrant` -> upstream
+5. Create PR for skeleton repo `feature/agentic-ai-skills` branch
 
 ## Important Context
 
 - Design doc is the source of truth: `docs/plans/2026-02-14-vagrant-mode-design.md` (~2000 lines)
+- Agent plan JSON is the execution source of truth: `.claude/plans/agent-teams/2026-02-14-vagrant-mode-agent-plan.json`
 - Decisions recorded in `.claude/plans/DECISIONS.md` (12 decisions)
 - The feature adds 5 new files: `internal/vagrant/manager.go`, `internal/vagrant/provider.go`, `internal/vagrant/skill.go`, `internal/vagrant/mcp.go`, `internal/vagrant/tips.go`
 - The feature modifies 4 files: `claudeoptions.go`, `tooloptions.go`, `instance.go`, `userconfig.go`
@@ -76,8 +68,8 @@
 git status
 git log --oneline -5
 
-# Read the design doc
-cat docs/plans/2026-02-14-vagrant-mode-design.md
+# Read the agent plan
+cat .claude/plans/agent-teams/2026-02-14-vagrant-mode-agent-plan.md
 
 # Verify build
 go build ./...

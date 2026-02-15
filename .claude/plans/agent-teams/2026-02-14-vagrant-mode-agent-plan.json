@@ -1,0 +1,1628 @@
+{
+  "meta": {
+    "title": "Vagrant Mode (Just Do It) — Agent Team Plan",
+    "created": "2026-02-15",
+    "sourcePlan": "docs/plans/2026-02-14-vagrant-mode-design.md",
+    "goal": "Add 'Just do it (vagrant sudo)' checkbox to agent-deck that auto-manages a Vagrant VM lifecycle and runs Claude Code inside it with --dangerously-skip-permissions and sudo access",
+    "architecture": "Wrapper Command approach — checkbox in TUI, VagrantManager handles VM lifecycle, commands wrapped via 'vagrant ssh --' with SSH reverse tunnels and SendEnv. VagrantProvider interface for testability.",
+    "techStack": ["Go 1.24", "Bubble Tea TUI", "Vagrant", "VirtualBox", "tmux", "SSH"],
+    "totalTasks": 27,
+    "totalWaves": 6,
+    "averageParallelism": 4.5,
+    "maxParallelism": 9,
+    "criticalPathLength": 6
+  },
+  "dependencyGraph": {
+    "description": "Wave 1 (Foundation) → Wave 2 (Core Manager) → Wave 3 (MCP & Skills) → Wave 4 (Instance Integration) → Wave 5 (UI) → Wave 6 (Testing)",
+    "waves": [
+      {
+        "wave": 1,
+        "name": "Foundation",
+        "tasks": ["task-1.1", "task-1.2", "task-1.3"],
+        "parallelism": 3,
+        "checkpoint": {
+          "type": "user-review",
+          "message": "Wave 1 complete: Config types, VagrantProvider interface, and ClaudeOptions field established.",
+          "asciiArt": "    ┌─────────────────────────────────────────────────────────────────────┐\n    │                                                                     │\n    │   ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   │\n    │   ░░  ┌─────┐  ┌─────┐  ┌─────┐                               ░░   │\n    │   ░░  │Types│──│Iface│──│ Opts│    ◇ FOUNDATION ◇              ░░   │\n    │   ░░  └──┬──┘  └──┬──┘  └──┬──┘                               ░░   │\n    │   ░░     │        │        │       3 tasks · 3/3 parallel      ░░   │\n    │   ░░     ▼        ▼        ▼                                   ░░   │\n    │   ░░   ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓   Bedrock laid.              ░░   │\n    │   ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   │\n    │           W A V E   1   C O M P L E T E                             │\n    └─────────────────────────────────────────────────────────────────────┘",
+          "reviewItems": ["VagrantSettings struct fields match design doc", "VagrantProvider interface covers all Manager methods", "UseVagrantMode field in ClaudeOptions with JSON tag"],
+          "manualActions": []
+        },
+        "qualityGates": ["code-review"]
+      },
+      {
+        "wave": 2,
+        "name": "Core Infrastructure",
+        "tasks": ["task-2.1", "task-2.2", "task-2.3", "task-2.4", "task-2.5", "task-2.6", "task-2.7"],
+        "parallelism": 7,
+        "checkpoint": {
+          "type": "user-review",
+          "message": "Wave 2 complete: VagrantManager with full lifecycle, Vagrantfile generation, preflight checks, health monitoring, drift detection, and multi-session support.",
+          "asciiArt": "         ◆━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━◆\n         ┃                                                       ┃\n         ┃   ██   ██  █████  ██    ██ ██████     ████████         ┃\n         ┃   ██   ██ ██   ██ ██    ██ ██              ██          ┃\n         ┃   ██ █ ██ ███████ ██    ██ █████      ██████           ┃\n         ┃   ██████  ██   ██  ██  ██  ██         ██              ┃\n         ┃    ██ ██  ██   ██   ████   ██████     ████████         ┃\n         ┃                                                       ┃\n         ┃   ┌────┐ ┌────┐ ┌────┐ ┌────┐ ┌────┐ ┌────┐ ┌────┐  ┃\n         ┃   │Mgr │ │VFile│ │Boot│ │Pref│ │Hlth│ │Drft│ │Multi│ ┃\n         ┃   └─┬──┘ └─┬──┘ └─┬──┘ └─┬──┘ └─┬──┘ └─┬──┘ └─┬──┘  ┃\n         ┃     ▼      ▼      ▼      ▼      ▼      ▼      ▼      ┃\n         ┃   ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓   ┃\n         ┃       C O R E   I N F R A S T R U C T U R E           ┃\n         ┃         7 tasks  ·  7/7 parallel  ·  100%              ┃\n         ◆━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━◆",
+          "reviewItems": ["Manager methods match VagrantProvider interface", "Vagrantfile template interpolation correct", "Preflight thresholds (5GB/10GB) match design", "Health check two-phase logic", "Config hash deterministic"],
+          "manualActions": []
+        },
+        "qualityGates": ["code-review", "build-verification"]
+      },
+      {
+        "wave": 3,
+        "name": "MCP & Skills",
+        "tasks": ["task-3.1", "task-3.2", "task-3.3", "task-3.4", "task-3.5"],
+        "parallelism": 5,
+        "checkpoint": {
+          "type": "user-review",
+          "message": "Wave 3 complete: MCP config generation for Vagrant, SSH reverse tunnel support, sudo skill with credential guard, loading tips, and command wrapping.",
+          "asciiArt": "    ┌───────────────────────────────────────────────────────────────┐\n    │                  ╔═══════════════════════╗                     │\n    │    ◐─────────────║  M C P  &  S K I L L S ║──────────────◑    │\n    │    │             ╚═══════════════════════╝              │     │\n    │    │                                                    │     │\n    │  ┌─┴──┐  ┌─────┐  ┌─────┐  ┌─────┐  ┌─────┐          │     │\n    │  │MCP │──│Skill│──│Tips │──│Wrap │──│Sync │          │     │\n    │  │.json│  │+Hook│  │×100 │  │SSH-R│  │Cfg  │          │     │\n    │  └────┘  └─────┘  └─────┘  └─────┘  └─────┘          │     │\n    │    │             ◇ Tunnels Forged ◇                     │     │\n    │    ◐───────────── 5 tasks · 5/5 parallel ──────────────◑     │\n    │                     W A V E   3                               │\n    └───────────────────────────────────────────────────────────────┘",
+          "reviewItems": ["WriteMCPJsonForVagrant bypasses pool sockets", "CollectHTTPMCPPorts extracts localhost ports correctly", "Credential guard hook patterns complete", "100 tips present (50+50)", "WrapCommand format matches design"],
+          "manualActions": []
+        },
+        "qualityGates": ["code-review", "security-review"]
+      },
+      {
+        "wave": 4,
+        "name": "Instance Lifecycle",
+        "tasks": ["task-4.1", "task-4.2", "task-4.3", "task-4.4", "task-4.5"],
+        "parallelism": 3,
+        "checkpoint": {
+          "type": "user-review",
+          "message": "Wave 4 complete: Instance lifecycle fully integrated with Vagrant — start/stop/restart hooks, health monitoring, config drift handling, and multi-session prompting.",
+          "asciiArt": "              ⚡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━⚡\n              ┃                                            ┃\n              ┃   ┌──Start──┐   ┌──Stop──┐   ┌─Restart─┐  ┃\n              ┃   │ up/wrap │──▶│suspend │──▶│recover  │  ┃\n              ┃   └────┬────┘   └────┬───┘   └────┬────┘  ┃\n              ┃        │             │             │        ┃\n              ┃        ▼             ▼             ▼        ┃\n              ┃   ┌─Health──┐   ┌─Drift──┐   ┌─Multi──┐   ┃\n              ┃   │30s poll │   │re-prov │   │share?  │   ┃\n              ┃   └─────────┘   └────────┘   └────────┘   ┃\n              ┃                                            ┃\n              ┃   I N S T A N C E   L I F E C Y C L E      ┃\n              ┃     5 tasks · 3 parallel · Wave 4           ┃\n              ⚡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━⚡",
+          "reviewItems": ["vagrantProvider interface used (not concrete Manager)", "vmOpDone channel + vmOpInFlight atomic pattern", "restartVagrantSession state machine covers all states", "Config drift triggers Provision() not Destroy()"],
+          "manualActions": []
+        },
+        "qualityGates": ["code-review", "security-review"]
+      },
+      {
+        "wave": 5,
+        "name": "UI Integration",
+        "tasks": ["task-5.1", "task-5.2", "task-5.3", "task-5.4"],
+        "parallelism": 4,
+        "checkpoint": {
+          "type": "user-review",
+          "message": "Wave 5 complete: TUI checkbox, boot progress display, stale VM cleanup dialog, and Apple Silicon detection all wired up.",
+          "asciiArt": "    ╔══════════════════════════════════════════════════════════════╗\n    ║                                                              ║\n    ║   ┌──────────────────────────────────────────────┐           ║\n    ║   │  New Session                                 │           ║\n    ║   │                                              │           ║\n    ║   │  [x] Just do it (vagrant sudo)     ← NEW    │           ║\n    ║   │  [x] Skip permissions (forced)               │           ║\n    ║   │                                              │           ║\n    ║   │  my-project  ⟳ Provisioning... (2m 34s)     │           ║\n    ║   │  💡 Use NFS for 10x faster I/O...           │           ║\n    ║   └──────────────────────────────────────────────┘           ║\n    ║                                                              ║\n    ║           U I   I N T E G R A T I O N                        ║\n    ║             4 tasks · 4/4 parallel · Wave 5                  ║\n    ╚══════════════════════════════════════════════════════════════╝",
+          "reviewItems": ["Checkbox below Teammate mode in both NewDialog and ForkDialog", "skipPermissions forced on when vagrant checked", "Boot phase + elapsed timer in session list", "Shift+D cleanup dialog layout"],
+          "manualActions": []
+        },
+        "qualityGates": ["code-review"]
+      },
+      {
+        "wave": 6,
+        "name": "Hardening & Polish",
+        "tasks": ["task-6.1", "task-6.2", "task-6.3", "task-6.4", "task-6.5", "task-6.6", "task-6.7", "task-6.8", "task-6.9"],
+        "parallelism": 9,
+        "checkpoint": {
+          "type": "user-review",
+          "message": "Wave 6 complete: All unit tests written and passing. Mock provider enables CI testing. Full coverage across manager, MCP, health, lifecycle, credentials, drift, tips, and UI.",
+          "asciiArt": "                        *    .  *       .             *\n         *   .        *          .     *    .    *    .        *\n      .    *    .  ╔══════════════════════════════════╗    .    *\n     .        .    ║  ★  A L L   W A V E S  ★        ║  .        .\n       *  .     *  ║     C O M P L E T E !           ║     *  .\n    .        .     ╚══════════╦═══╦════════════════════╝  .        .\n         .    *         ░░░░░░║   ║░░░░░░        *    .\n      *     .     *     ░░████║   ║████░░     *     .     *\n         .         ░░░░░█████║   ║█████░░░░░         .\n      .    *    ░░░░████████║     ║████████░░░░    *    .\n            ░░░░███████████╚═════╝███████████░░░░\n        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n          27 tasks  ·  6 waves  ·  4.5x parallelism\n             V A G R A N T   M O D E   R E A D Y",
+          "reviewItems": ["All tests pass", "go build ./... succeeds", "go test ./internal/vagrant/... -count=1 passes", "go test ./internal/session/... -count=1 passes"],
+          "manualActions": ["Manual integration test: create vagrant session in TUI", "Verify MCP connectivity inside VM"]
+        },
+        "qualityGates": ["code-review", "build-verification", "security-review"]
+      }
+    ]
+  },
+  "tasksById": {
+    "task-1.1": {
+      "id": "task-1.1",
+      "name": "VagrantSettings struct + config parsing",
+      "files": {
+        "create": [],
+        "modify": ["internal/session/userconfig.go"],
+        "test": ["internal/session/userconfig_test.go"]
+      },
+      "steps": [
+        {"step": 1, "action": "Write tests for VagrantSettings defaults and overrides", "detail": "TestGetVagrantSettingsDefaults, TestGetVagrantSettingsOverrides", "command": null},
+        {"step": 2, "action": "Add VagrantSettings struct with all fields", "detail": "14+ fields: MemoryMB, CPUs, Box, AutoSuspend, AutoDestroy, HostGatewayIP, SyncedFolderType, ProvisionPackages, ProvisionPkgExclude, NpmPackages, ProvisionScript, Vagrantfile, HealthCheckInterval, PortForwards, Env, ForwardProxyEnv", "command": null},
+        {"step": 3, "action": "Add PortForward struct", "detail": "Guest, Host, Protocol fields with TOML tags", "command": null},
+        {"step": 4, "action": "Add Vagrant field to UserConfig struct", "detail": "Vagrant VagrantSettings `toml:\"vagrant\"`", "command": null},
+        {"step": 5, "action": "Add GetVagrantSettings() with defaults", "detail": "4096MB, 2 CPUs, bento/ubuntu-24.04, auto_suspend=true, health_check_interval=30, forward_proxy_env=true", "command": null},
+        {"step": 6, "action": "Run tests", "detail": "Verify defaults and TOML override parsing", "command": "go test ./internal/session/ -run TestGetVagrantSettings -count=1 -v"}
+      ],
+      "blockedBy": [],
+      "agentOrchestration": {
+        "model": "sonnet",
+        "modelRationale": "Standard struct creation with TDD — sonnet handles this well",
+        "delegateTo": ["tdd-guide"],
+        "mcpTools": {
+          "required": [],
+          "optional": ["context7"],
+          "details": {"context7": "TOML parsing reference if needed"}
+        },
+        "skills": ["tdd-workflow"],
+        "permissionMode": "acceptEdits",
+        "estimatedComplexity": "medium",
+        "wave": 1,
+        "canParallelWith": ["task-1.2", "task-1.3"],
+        "blockedBy": []
+      },
+      "progressTracking": {
+        "totalSteps": 6,
+        "completedSteps": 0,
+        "percentage": 0,
+        "status": "pending",
+        "activeForm": "Adding VagrantSettings to userconfig.go",
+        "checkpoints": [
+          {"step": 1, "label": "Tests written", "status": "pending"},
+          {"step": 2, "label": "VagrantSettings struct added", "status": "pending"},
+          {"step": 3, "label": "PortForward struct added", "status": "pending"},
+          {"step": 4, "label": "UserConfig field added", "status": "pending"},
+          {"step": 5, "label": "GetVagrantSettings defaults", "status": "pending"},
+          {"step": 6, "label": "Tests pass", "status": "pending"}
+        ]
+      }
+    },
+    "task-1.2": {
+      "id": "task-1.2",
+      "name": "VagrantProvider interface",
+      "files": {
+        "create": ["internal/vagrant/provider.go"],
+        "modify": [],
+        "test": []
+      },
+      "steps": [
+        {"step": 1, "action": "Create internal/vagrant/ package directory", "detail": "mkdir -p internal/vagrant", "command": "mkdir -p internal/vagrant"},
+        {"step": 2, "action": "Define VagrantProvider interface", "detail": "All 24 methods from design doc: IsInstalled, PreflightCheck, EnsureRunning, Suspend, Resume, Destroy, ForceRestart, Reload, Provision, Status, HealthCheck, WrapCommand, EnsureVagrantfile, EnsureSudoSkill, SyncClaudeConfig, GetMCPPackages, HasConfigDrift, WriteConfigHash, RegisterSession, UnregisterSession, SessionCount, IsLastSession, SetDotfilePath, CheckDiskSpace, IsBoxCached", "command": null},
+        {"step": 3, "action": "Define BootPhase type and constants", "detail": "8 phases: Downloading, Importing, Booting, Network, Mounting, Provisioning, NpmInstall, Ready", "command": null},
+        {"step": 4, "action": "Define VMHealth struct", "detail": "State, Healthy, Responsive, Message fields", "command": null}
+      ],
+      "blockedBy": [],
+      "agentOrchestration": {
+        "model": "sonnet",
+        "modelRationale": "Interface definition is straightforward — sonnet sufficient",
+        "delegateTo": [],
+        "mcpTools": {
+          "required": [],
+          "optional": [],
+          "details": {}
+        },
+        "skills": [],
+        "permissionMode": "acceptEdits",
+        "estimatedComplexity": "low",
+        "wave": 1,
+        "canParallelWith": ["task-1.1", "task-1.3"],
+        "blockedBy": []
+      },
+      "progressTracking": {
+        "totalSteps": 4,
+        "completedSteps": 0,
+        "percentage": 0,
+        "status": "pending",
+        "activeForm": "Creating VagrantProvider interface",
+        "checkpoints": [
+          {"step": 1, "label": "Package directory created", "status": "pending"},
+          {"step": 2, "label": "Interface defined", "status": "pending"},
+          {"step": 3, "label": "BootPhase type defined", "status": "pending"},
+          {"step": 4, "label": "VMHealth struct defined", "status": "pending"}
+        ]
+      }
+    },
+    "task-1.3": {
+      "id": "task-1.3",
+      "name": "UseVagrantMode in ClaudeOptions",
+      "files": {
+        "create": [],
+        "modify": ["internal/session/tooloptions.go"],
+        "test": ["internal/session/tooloptions_test.go"]
+      },
+      "steps": [
+        {"step": 1, "action": "Write test for UseVagrantMode forcing skip permissions", "detail": "TestClaudeOptionsVagrantModeForceSkipPermissions", "command": null},
+        {"step": 2, "action": "Add UseVagrantMode field to ClaudeOptions", "detail": "UseVagrantMode bool `json:\"use_vagrant_mode,omitempty\"`", "command": null},
+        {"step": 3, "action": "Update ToArgs to force --dangerously-skip-permissions when UseVagrantMode", "detail": "if o.UseVagrantMode { o.SkipPermissions = true }", "command": null},
+        {"step": 4, "action": "Update ToArgsForFork similarly", "detail": "Same force logic for fork path", "command": null},
+        {"step": 5, "action": "Run tests", "detail": "Verify skip permissions forced", "command": "go test ./internal/session/ -run TestClaudeOptions -count=1 -v"}
+      ],
+      "blockedBy": [],
+      "agentOrchestration": {
+        "model": "haiku",
+        "modelRationale": "Simple field addition and boolean logic — haiku sufficient",
+        "delegateTo": ["tdd-guide"],
+        "mcpTools": {
+          "required": [],
+          "optional": [],
+          "details": {}
+        },
+        "skills": ["tdd-workflow"],
+        "permissionMode": "acceptEdits",
+        "estimatedComplexity": "low",
+        "wave": 1,
+        "canParallelWith": ["task-1.1", "task-1.2"],
+        "blockedBy": []
+      },
+      "progressTracking": {
+        "totalSteps": 5,
+        "completedSteps": 0,
+        "percentage": 0,
+        "status": "pending",
+        "activeForm": "Adding UseVagrantMode to ClaudeOptions",
+        "checkpoints": [
+          {"step": 1, "label": "Test written", "status": "pending"},
+          {"step": 2, "label": "Field added", "status": "pending"},
+          {"step": 3, "label": "ToArgs updated", "status": "pending"},
+          {"step": 4, "label": "ToArgsForFork updated", "status": "pending"},
+          {"step": 5, "label": "Tests pass", "status": "pending"}
+        ]
+      }
+    },
+    "task-2.1": {
+      "id": "task-2.1",
+      "name": "Manager struct + basic lifecycle",
+      "files": {
+        "create": ["internal/vagrant/manager.go"],
+        "modify": [],
+        "test": ["internal/vagrant/manager_test.go"]
+      },
+      "steps": [
+        {"step": 1, "action": "Write tests for Manager struct creation and IsInstalled", "detail": "TestNewManager, TestIsInstalled", "command": null},
+        {"step": 2, "action": "Define Manager struct", "detail": "projectPath, settings, dotfilePath, sessions, mu fields", "command": null},
+        {"step": 3, "action": "Implement NewManager constructor", "detail": "Accept projectPath and VagrantSettings", "command": null},
+        {"step": 4, "action": "Implement IsInstalled via exec.LookPath", "detail": "Returns bool", "command": null},
+        {"step": 5, "action": "Implement vagrantCmd helper", "detail": "Sets Dir, VAGRANT_DOTFILE_PATH env if set", "command": null},
+        {"step": 6, "action": "Implement Status via vagrant status --machine-readable", "detail": "Parse machine-readable output for state", "command": null},
+        {"step": 7, "action": "Implement EnsureRunning with phase callback", "detail": "vagrant up with stdout parsing for BootPhase, Apple Silicon kext detection", "command": null},
+        {"step": 8, "action": "Implement Suspend, Resume, Destroy, ForceRestart, Reload, Provision", "detail": "Each wraps vagrant command", "command": null},
+        {"step": 9, "action": "Verify Manager implements VagrantProvider interface", "detail": "Compile-time check: var _ VagrantProvider = (*Manager)(nil)", "command": null},
+        {"step": 10, "action": "Run tests", "detail": "Unit tests for command construction and status parsing", "command": "go test ./internal/vagrant/ -run TestManager -count=1 -v"}
+      ],
+      "blockedBy": ["task-1.1", "task-1.2"],
+      "agentOrchestration": {
+        "model": "sonnet",
+        "modelRationale": "Core implementation with subprocess management — sonnet handles this well",
+        "delegateTo": ["tdd-guide"],
+        "mcpTools": {
+          "required": [],
+          "optional": ["context7"],
+          "details": {"context7": "Go exec.Command patterns reference"}
+        },
+        "skills": ["tdd-workflow"],
+        "permissionMode": "acceptEdits",
+        "estimatedComplexity": "high",
+        "wave": 2,
+        "canParallelWith": ["task-2.2", "task-2.3", "task-2.4", "task-2.5", "task-2.6", "task-2.7"],
+        "blockedBy": ["task-1.1", "task-1.2"]
+      },
+      "progressTracking": {
+        "totalSteps": 10,
+        "completedSteps": 0,
+        "percentage": 0,
+        "status": "pending",
+        "activeForm": "Implementing VagrantManager lifecycle",
+        "checkpoints": [
+          {"step": 1, "label": "Tests written", "status": "pending"},
+          {"step": 2, "label": "Manager struct defined", "status": "pending"},
+          {"step": 5, "label": "vagrantCmd helper works", "status": "pending"},
+          {"step": 7, "label": "EnsureRunning with phases", "status": "pending"},
+          {"step": 9, "label": "Interface satisfied", "status": "pending"},
+          {"step": 10, "label": "Tests pass", "status": "pending"}
+        ]
+      }
+    },
+    "task-2.2": {
+      "id": "task-2.2",
+      "name": "Vagrantfile template generation",
+      "files": {
+        "create": [],
+        "modify": ["internal/vagrant/manager.go"],
+        "test": ["internal/vagrant/manager_test.go"]
+      },
+      "steps": [
+        {"step": 1, "action": "Write tests for EnsureVagrantfile", "detail": "TestEnsureVagrantfile, TestEnsureVagrantfileWithMCPs, TestEnsureVagrantfileWithCustomPackages, TestEnsureVagrantfileWithPortForwards, TestEnsureVagrantfileWithProvisionScript, TestEnsureVagrantfileCustomTemplate, TestEnsureVagrantfileExistingRespected, TestEnsureVagrantfilePortForwardsAutoCorrect", "command": null},
+        {"step": 2, "action": "Write tests for package resolution", "detail": "TestProvisionPackagesAppendToBase, TestProvisionPackagesExclude, TestProvisionPackagesExcludeAndAppend, TestProvisionPackagesEmptyUsesBaseOnly", "command": null},
+        {"step": 3, "action": "Write tests for hostname generation", "detail": "TestHostnameFromProjectName, TestHostnameSanitization, TestHostnameTruncation", "command": null},
+        {"step": 4, "action": "Implement resolvedPackages() helper", "detail": "Base set minus excludes plus additions", "command": null},
+        {"step": 5, "action": "Implement hostname sanitization", "detail": "Lowercase, replace non-alnum with -, truncate 63 chars, RFC 1123", "command": null},
+        {"step": 6, "action": "Implement EnsureVagrantfile", "detail": "Template with box, hostname, memory, cpus, sync type, port forwards, packages, npm packages, provision script, proxy env, AcceptEnv *", "command": null},
+        {"step": 7, "action": "Handle rsync credential exclusion", "detail": "rsync__exclude list for credential files when synced_folder_type=rsync", "command": null},
+        {"step": 8, "action": "Run tests", "detail": "Verify all generation scenarios", "command": "go test ./internal/vagrant/ -run TestEnsureVagrantfile -count=1 -v"}
+      ],
+      "blockedBy": ["task-1.1", "task-1.2"],
+      "agentOrchestration": {
+        "model": "sonnet",
+        "modelRationale": "Template generation with string interpolation — sonnet handles well",
+        "delegateTo": ["tdd-guide"],
+        "mcpTools": {
+          "required": [],
+          "optional": [],
+          "details": {}
+        },
+        "skills": ["tdd-workflow"],
+        "permissionMode": "acceptEdits",
+        "estimatedComplexity": "high",
+        "wave": 2,
+        "canParallelWith": ["task-2.1", "task-2.3", "task-2.4", "task-2.5", "task-2.6", "task-2.7"],
+        "blockedBy": ["task-1.1", "task-1.2"]
+      },
+      "progressTracking": {
+        "totalSteps": 8,
+        "completedSteps": 0,
+        "percentage": 0,
+        "status": "pending",
+        "activeForm": "Implementing Vagrantfile template generation",
+        "checkpoints": [
+          {"step": 1, "label": "EnsureVagrantfile tests written", "status": "pending"},
+          {"step": 3, "label": "Hostname tests written", "status": "pending"},
+          {"step": 6, "label": "Template generation implemented", "status": "pending"},
+          {"step": 8, "label": "Tests pass", "status": "pending"}
+        ]
+      }
+    },
+    "task-2.3": {
+      "id": "task-2.3",
+      "name": "Boot phase parser",
+      "files": {
+        "create": [],
+        "modify": ["internal/vagrant/manager.go"],
+        "test": ["internal/vagrant/manager_test.go"]
+      },
+      "steps": [
+        {"step": 1, "action": "Write tests for boot phase parsing", "detail": "TestBootPhaseParser, TestBootPhaseDownloadDetection", "command": null},
+        {"step": 2, "action": "Implement parseBootPhase function", "detail": "Match vagrant machine-readable output patterns to BootPhase constants", "command": null},
+        {"step": 3, "action": "Implement wrapVagrantUpError", "detail": "Apple Silicon kernel extension detection from stderr", "command": null},
+        {"step": 4, "action": "Write test for Apple Silicon detection", "detail": "TestWrapVagrantUpErrorAppleSiliconKext, TestWrapVagrantUpErrorNonAppleSilicon, TestWrapVagrantUpErrorUnrelatedFailure", "command": null},
+        {"step": 5, "action": "Run tests", "detail": "Verify phase parsing and error wrapping", "command": "go test ./internal/vagrant/ -run TestBootPhase -count=1 -v"}
+      ],
+      "blockedBy": ["task-1.2"],
+      "agentOrchestration": {
+        "model": "sonnet",
+        "modelRationale": "String parsing with pattern matching — standard sonnet work",
+        "delegateTo": ["tdd-guide"],
+        "mcpTools": {
+          "required": [],
+          "optional": [],
+          "details": {}
+        },
+        "skills": ["tdd-workflow"],
+        "permissionMode": "acceptEdits",
+        "estimatedComplexity": "medium",
+        "wave": 2,
+        "canParallelWith": ["task-2.1", "task-2.2", "task-2.4", "task-2.5", "task-2.6", "task-2.7"],
+        "blockedBy": ["task-1.2"]
+      },
+      "progressTracking": {
+        "totalSteps": 5,
+        "completedSteps": 0,
+        "percentage": 0,
+        "status": "pending",
+        "activeForm": "Implementing boot phase parser",
+        "checkpoints": [
+          {"step": 1, "label": "Tests written", "status": "pending"},
+          {"step": 2, "label": "Phase parser implemented", "status": "pending"},
+          {"step": 3, "label": "Error wrapping implemented", "status": "pending"},
+          {"step": 5, "label": "Tests pass", "status": "pending"}
+        ]
+      }
+    },
+    "task-2.4": {
+      "id": "task-2.4",
+      "name": "Preflight checks",
+      "files": {
+        "create": [],
+        "modify": ["internal/vagrant/manager.go"],
+        "test": ["internal/vagrant/manager_test.go"]
+      },
+      "steps": [
+        {"step": 1, "action": "Write preflight tests", "detail": "TestPreflightCheckBlocksBelowMinimum, TestPreflightCheckWarnsLowSpace, TestPreflightCheckPassesAboveThreshold, TestPreflightCheckAccountsForBoxCache, TestIsBoxCached, TestPreflightCheckVBoxMissing, TestPreflightCheckVBoxTooOld, TestPreflightCheckVBoxAppleSiliconWarning, TestCheckVBoxInstalledParsesVersion", "command": null},
+        {"step": 2, "action": "Implement CheckDiskSpace", "detail": "syscall.Statfs on project directory filesystem", "command": null},
+        {"step": 3, "action": "Implement CheckVBoxInstalled", "detail": "exec.LookPath + VBoxManage --version parsing", "command": null},
+        {"step": 4, "action": "Implement IsBoxCached", "detail": "vagrant box list --machine-readable parsing", "command": null},
+        {"step": 5, "action": "Implement PreflightCheck", "detail": "Combined: Vagrant + VBox + disk space with thresholds 5GB/10GB", "command": null},
+        {"step": 6, "action": "Run tests", "detail": "Verify all preflight scenarios", "command": "go test ./internal/vagrant/ -run TestPreflight -count=1 -v"}
+      ],
+      "blockedBy": ["task-1.1", "task-1.2"],
+      "agentOrchestration": {
+        "model": "sonnet",
+        "modelRationale": "System checks with subprocess calls — standard sonnet work",
+        "delegateTo": ["tdd-guide"],
+        "mcpTools": {
+          "required": [],
+          "optional": [],
+          "details": {}
+        },
+        "skills": ["tdd-workflow"],
+        "permissionMode": "acceptEdits",
+        "estimatedComplexity": "medium",
+        "wave": 2,
+        "canParallelWith": ["task-2.1", "task-2.2", "task-2.3", "task-2.5", "task-2.6", "task-2.7"],
+        "blockedBy": ["task-1.1", "task-1.2"]
+      },
+      "progressTracking": {
+        "totalSteps": 6,
+        "completedSteps": 0,
+        "percentage": 0,
+        "status": "pending",
+        "activeForm": "Implementing preflight checks",
+        "checkpoints": [
+          {"step": 1, "label": "Tests written", "status": "pending"},
+          {"step": 3, "label": "VBox check implemented", "status": "pending"},
+          {"step": 5, "label": "Combined preflight implemented", "status": "pending"},
+          {"step": 6, "label": "Tests pass", "status": "pending"}
+        ]
+      }
+    },
+    "task-2.5": {
+      "id": "task-2.5",
+      "name": "Two-phase health check",
+      "files": {
+        "create": [],
+        "modify": ["internal/vagrant/manager.go"],
+        "test": ["internal/vagrant/manager_test.go"]
+      },
+      "steps": [
+        {"step": 1, "action": "Write health check tests", "detail": "TestHealthCheckPhase1, TestHealthCheckPhase2LivenessProbe, TestHealthCheckPhase2Timeout, TestHealthCheckCaching", "command": null},
+        {"step": 2, "action": "Implement HealthCheck Phase 1", "detail": "vagrant status --machine-readable → VMHealth", "command": null},
+        {"step": 3, "action": "Implement HealthCheck Phase 2", "detail": "vagrant ssh -c 'echo pong' with 5s timeout (context.WithTimeout)", "command": null},
+        {"step": 4, "action": "Add 30s TTL caching for Phase 1", "detail": "In-memory cache with lastHealthCheck timestamp", "command": null},
+        {"step": 5, "action": "Implement vmStateMessage helper", "detail": "Map VM states to human-readable messages", "command": null},
+        {"step": 6, "action": "Run tests", "detail": "Verify two-phase logic and caching", "command": "go test ./internal/vagrant/ -run TestHealthCheck -count=1 -v"}
+      ],
+      "blockedBy": ["task-1.2"],
+      "agentOrchestration": {
+        "model": "sonnet",
+        "modelRationale": "Subprocess management with timeouts — standard sonnet work",
+        "delegateTo": ["tdd-guide"],
+        "mcpTools": {
+          "required": [],
+          "optional": [],
+          "details": {}
+        },
+        "skills": ["tdd-workflow"],
+        "permissionMode": "acceptEdits",
+        "estimatedComplexity": "medium",
+        "wave": 2,
+        "canParallelWith": ["task-2.1", "task-2.2", "task-2.3", "task-2.4", "task-2.6", "task-2.7"],
+        "blockedBy": ["task-1.2"]
+      },
+      "progressTracking": {
+        "totalSteps": 6,
+        "completedSteps": 0,
+        "percentage": 0,
+        "status": "pending",
+        "activeForm": "Implementing two-phase health check",
+        "checkpoints": [
+          {"step": 1, "label": "Tests written", "status": "pending"},
+          {"step": 3, "label": "Liveness probe implemented", "status": "pending"},
+          {"step": 4, "label": "Caching added", "status": "pending"},
+          {"step": 6, "label": "Tests pass", "status": "pending"}
+        ]
+      }
+    },
+    "task-2.6": {
+      "id": "task-2.6",
+      "name": "Config drift detection",
+      "files": {
+        "create": [],
+        "modify": ["internal/vagrant/manager.go"],
+        "test": ["internal/vagrant/manager_test.go"]
+      },
+      "steps": [
+        {"step": 1, "action": "Write config drift tests", "detail": "TestConfigHashDeterministic, TestConfigHashChangesOnPackageAdd, TestConfigHashChangesOnProvisionScript, TestHasConfigDriftDetectsChange, TestHasConfigDriftFalseOnFirstRun, TestBoxChangeLogsWarning", "command": null},
+        {"step": 2, "action": "Implement configHash()", "detail": "SHA-256 of box + packages + npm packages + provision script content + port forwards", "command": null},
+        {"step": 3, "action": "Implement HasConfigDrift()", "detail": "Compare stored hash file to current hash", "command": null},
+        {"step": 4, "action": "Implement WriteConfigHash()", "detail": "Write hash to .vagrant/agent-deck-config.sha256", "command": null},
+        {"step": 5, "action": "Run tests", "detail": "Verify hash determinism and drift detection", "command": "go test ./internal/vagrant/ -run TestConfigHash -count=1 -v"}
+      ],
+      "blockedBy": ["task-1.1", "task-1.2"],
+      "agentOrchestration": {
+        "model": "haiku",
+        "modelRationale": "Simple hashing and file I/O — haiku sufficient",
+        "delegateTo": ["tdd-guide"],
+        "mcpTools": {
+          "required": [],
+          "optional": [],
+          "details": {}
+        },
+        "skills": ["tdd-workflow"],
+        "permissionMode": "acceptEdits",
+        "estimatedComplexity": "low",
+        "wave": 2,
+        "canParallelWith": ["task-2.1", "task-2.2", "task-2.3", "task-2.4", "task-2.5", "task-2.7"],
+        "blockedBy": ["task-1.1", "task-1.2"]
+      },
+      "progressTracking": {
+        "totalSteps": 5,
+        "completedSteps": 0,
+        "percentage": 0,
+        "status": "pending",
+        "activeForm": "Implementing config drift detection",
+        "checkpoints": [
+          {"step": 1, "label": "Tests written", "status": "pending"},
+          {"step": 2, "label": "Hash function implemented", "status": "pending"},
+          {"step": 4, "label": "Hash persistence implemented", "status": "pending"},
+          {"step": 5, "label": "Tests pass", "status": "pending"}
+        ]
+      }
+    },
+    "task-2.7": {
+      "id": "task-2.7",
+      "name": "Multi-session tracking",
+      "files": {
+        "create": [],
+        "modify": ["internal/vagrant/manager.go"],
+        "test": ["internal/vagrant/manager_test.go"]
+      },
+      "steps": [
+        {"step": 1, "action": "Write multi-session tests", "detail": "TestRegisterUnregisterSession, TestSharedVMSuspendOnlyOnLastSession, TestSharedVMDestroyOnlyWhenAllDeleted, TestSeparateVMDotfilePath, TestSeparateVMCleanup, TestDetectRunningVMWithExistingSession, TestDetectRunningVMOrphaned", "command": null},
+        {"step": 2, "action": "Implement RegisterSession/UnregisterSession", "detail": "Thread-safe session tracking with mutex", "command": null},
+        {"step": 3, "action": "Implement SessionCount/IsLastSession", "detail": "Query session list", "command": null},
+        {"step": 4, "action": "Implement SetDotfilePath", "detail": "Set VAGRANT_DOTFILE_PATH for isolated VMs", "command": null},
+        {"step": 5, "action": "Implement lockfile persistence", "detail": "JSON lockfile at .vagrant/agent-deck.lock", "command": null},
+        {"step": 6, "action": "Run tests", "detail": "Verify session tracking and isolation", "command": "go test ./internal/vagrant/ -run TestSession -count=1 -v"}
+      ],
+      "blockedBy": ["task-1.2"],
+      "agentOrchestration": {
+        "model": "sonnet",
+        "modelRationale": "Concurrent session tracking with mutex — requires care",
+        "delegateTo": ["tdd-guide"],
+        "mcpTools": {
+          "required": [],
+          "optional": [],
+          "details": {}
+        },
+        "skills": ["tdd-workflow"],
+        "permissionMode": "acceptEdits",
+        "estimatedComplexity": "medium",
+        "wave": 2,
+        "canParallelWith": ["task-2.1", "task-2.2", "task-2.3", "task-2.4", "task-2.5", "task-2.6"],
+        "blockedBy": ["task-1.2"]
+      },
+      "progressTracking": {
+        "totalSteps": 6,
+        "completedSteps": 0,
+        "percentage": 0,
+        "status": "pending",
+        "activeForm": "Implementing multi-session tracking",
+        "checkpoints": [
+          {"step": 1, "label": "Tests written", "status": "pending"},
+          {"step": 2, "label": "Register/Unregister implemented", "status": "pending"},
+          {"step": 5, "label": "Lockfile persistence implemented", "status": "pending"},
+          {"step": 6, "label": "Tests pass", "status": "pending"}
+        ]
+      }
+    },
+    "task-3.1": {
+      "id": "task-3.1",
+      "name": "MCP config for Vagrant",
+      "files": {
+        "create": ["internal/vagrant/mcp.go"],
+        "modify": [],
+        "test": ["internal/vagrant/mcp_test.go"]
+      },
+      "steps": [
+        {"step": 1, "action": "Write MCP tests", "detail": "TestWriteMCPJsonForVagrant, TestCollectHTTPMCPPorts, TestCollectHTTPMCPPortsDedup, TestGetMCPPackages, TestCollectEnvVarNames", "command": null},
+        {"step": 2, "action": "Implement CollectHTTPMCPPorts", "detail": "Extract unique ports from localhost/127.0.0.1 HTTP/SSE URLs, sorted and deduplicated", "command": null},
+        {"step": 3, "action": "Implement CollectEnvVarNames", "detail": "Merge MCP env var names + vagrant.env names + ANTHROPIC_API_KEY", "command": null},
+        {"step": 4, "action": "Implement WriteMCPJsonForVagrant", "detail": "STDIO fallback (no pool sockets), URLs unchanged, env vars collected", "command": null},
+        {"step": 5, "action": "Implement GetMCPPackages", "detail": "Extract npm packages from npx-based MCPs", "command": null},
+        {"step": 6, "action": "Run tests", "detail": "Verify MCP config generation", "command": "go test ./internal/vagrant/ -run TestMCP -count=1 -v"}
+      ],
+      "blockedBy": ["task-2.1"],
+      "agentOrchestration": {
+        "model": "sonnet",
+        "modelRationale": "MCP config integration requires understanding existing MCP patterns",
+        "delegateTo": ["tdd-guide"],
+        "mcpTools": {
+          "required": [],
+          "optional": [],
+          "details": {}
+        },
+        "skills": ["tdd-workflow"],
+        "permissionMode": "acceptEdits",
+        "estimatedComplexity": "high",
+        "wave": 3,
+        "canParallelWith": ["task-3.2", "task-3.3", "task-3.4", "task-3.5"],
+        "blockedBy": ["task-2.1"]
+      },
+      "progressTracking": {
+        "totalSteps": 6,
+        "completedSteps": 0,
+        "percentage": 0,
+        "status": "pending",
+        "activeForm": "Implementing MCP config for Vagrant",
+        "checkpoints": [
+          {"step": 1, "label": "Tests written", "status": "pending"},
+          {"step": 2, "label": "Port collection implemented", "status": "pending"},
+          {"step": 4, "label": "WriteMCPJsonForVagrant implemented", "status": "pending"},
+          {"step": 6, "label": "Tests pass", "status": "pending"}
+        ]
+      }
+    },
+    "task-3.2": {
+      "id": "task-3.2",
+      "name": "Static skill + credential guard hook",
+      "files": {
+        "create": ["internal/vagrant/skill.go"],
+        "modify": [],
+        "test": ["internal/vagrant/skill_test.go"]
+      },
+      "steps": [
+        {"step": 1, "action": "Write skill tests", "detail": "TestGetVagrantSudoSkill, TestSudoSkillMentionsInotify, TestSudoSkillMentionsCredentialWarning, TestCredentialGuardHookInjected, TestCredentialGuardHookBlocksEnvFile, TestCredentialGuardHookBlocksSSHKey, TestCredentialGuardHookAllowsNormalFiles, TestCredentialGuardHookNotInjectedForNonVagrant", "command": null},
+        {"step": 2, "action": "Implement GetVagrantSudoSkill()", "detail": "Skill markdown with VM info, sudo access, Docker/Node/Git, /vagrant path, inotify/polling guidance, credential warning", "command": null},
+        {"step": 3, "action": "Implement EnsureSudoSkill()", "detail": "Write skill file to project .claude/skills/ directory", "command": null},
+        {"step": 4, "action": "Implement credential guard hook injection", "detail": "Write PreToolUse hook to .claude/settings.local.json (merge, don't overwrite)", "command": null},
+        {"step": 5, "action": "Implement GetCredentialGuardHook()", "detail": "Returns hook JSON for Read|View|Cat matcher with credential patterns", "command": null},
+        {"step": 6, "action": "Run tests", "detail": "Verify skill content and hook injection", "command": "go test ./internal/vagrant/ -run TestSkill -count=1 -v"}
+      ],
+      "blockedBy": ["task-1.2"],
+      "agentOrchestration": {
+        "model": "sonnet",
+        "modelRationale": "Security-sensitive credential guard hook requires careful implementation",
+        "delegateTo": ["tdd-guide", "security-reviewer"],
+        "mcpTools": {
+          "required": [],
+          "optional": [],
+          "details": {}
+        },
+        "skills": ["tdd-workflow", "security-review"],
+        "permissionMode": "default",
+        "estimatedComplexity": "medium",
+        "wave": 3,
+        "canParallelWith": ["task-3.1", "task-3.3", "task-3.4", "task-3.5"],
+        "blockedBy": ["task-1.2"]
+      },
+      "progressTracking": {
+        "totalSteps": 6,
+        "completedSteps": 0,
+        "percentage": 0,
+        "status": "pending",
+        "activeForm": "Implementing sudo skill and credential guard",
+        "checkpoints": [
+          {"step": 1, "label": "Tests written", "status": "pending"},
+          {"step": 2, "label": "Skill content implemented", "status": "pending"},
+          {"step": 4, "label": "Credential guard hook implemented", "status": "pending"},
+          {"step": 6, "label": "Tests pass", "status": "pending"}
+        ]
+      }
+    },
+    "task-3.3": {
+      "id": "task-3.3",
+      "name": "Loading tips (100 tips)",
+      "files": {
+        "create": ["internal/vagrant/tips.go"],
+        "modify": [],
+        "test": ["internal/vagrant/tips_test.go"]
+      },
+      "steps": [
+        {"step": 1, "action": "Write tips tests", "detail": "TestGetRandomTip, TestGetNextTipRotation", "command": null},
+        {"step": 2, "action": "Define Tip struct", "detail": "Text, Source, Category fields", "command": null},
+        {"step": 3, "action": "Embed 50 Vagrant best practice tips", "detail": "From design doc Loading Tips Content section", "command": null},
+        {"step": 4, "action": "Embed 50 world fact tips", "detail": "From design doc Loading Tips Content section", "command": null},
+        {"step": 5, "action": "Implement GetRandomTip() and GetNextTip(index)", "detail": "Random selection and sequential rotation", "command": null},
+        {"step": 6, "action": "Run tests", "detail": "Verify tip retrieval and rotation", "command": "go test ./internal/vagrant/ -run TestTip -count=1 -v"}
+      ],
+      "blockedBy": [],
+      "agentOrchestration": {
+        "model": "haiku",
+        "modelRationale": "Data-heavy file with simple struct — haiku can handle copying 100 tips",
+        "delegateTo": [],
+        "mcpTools": {
+          "required": [],
+          "optional": [],
+          "details": {}
+        },
+        "skills": [],
+        "permissionMode": "acceptEdits",
+        "estimatedComplexity": "low",
+        "wave": 3,
+        "canParallelWith": ["task-3.1", "task-3.2", "task-3.4", "task-3.5"],
+        "blockedBy": []
+      },
+      "progressTracking": {
+        "totalSteps": 6,
+        "completedSteps": 0,
+        "percentage": 0,
+        "status": "pending",
+        "activeForm": "Creating loading tips file",
+        "checkpoints": [
+          {"step": 1, "label": "Tests written", "status": "pending"},
+          {"step": 3, "label": "Vagrant tips embedded", "status": "pending"},
+          {"step": 4, "label": "World facts embedded", "status": "pending"},
+          {"step": 6, "label": "Tests pass", "status": "pending"}
+        ]
+      }
+    },
+    "task-3.4": {
+      "id": "task-3.4",
+      "name": "Command wrapping with SSH tunnels",
+      "files": {
+        "create": [],
+        "modify": ["internal/vagrant/manager.go"],
+        "test": ["internal/vagrant/manager_test.go"]
+      },
+      "steps": [
+        {"step": 1, "action": "Write WrapCommand tests", "detail": "TestWrapCommand, TestWrapCommandWithSendEnv, TestWrapCommandWithVagrantEnvVars, TestWrapCommandWithTunnels, TestPollingEnvVarsInjectedForVirtualBox, TestPollingEnvVarsNotInjectedForNFS, TestPollingEnvVarsUserOverride, TestProxyEnvVarsForwardedWhenSet, TestProxyEnvVarsNotForwardedWhenUnset, TestProxyEnvVarsDisabledByConfig, TestProxyEnvVarsUserOverride", "command": null},
+        {"step": 2, "action": "Implement WrapCommand", "detail": "vagrant ssh -- with -R flags, -o SendEnv flags, -t PTY allocation, cd /vagrant && command", "command": null},
+        {"step": 3, "action": "Implement collectProxyEnvVars", "detail": "Detect host proxy env vars, deduplicate uppercase/lowercase", "command": null},
+        {"step": 4, "action": "Add polling env var auto-injection", "detail": "CHOKIDAR_USEPOLLING, WATCHPACK_POLLING, TSC_WATCHFILE when synced_folder_type=virtualbox", "command": null},
+        {"step": 5, "action": "Run tests", "detail": "Verify command format with all combinations", "command": "go test ./internal/vagrant/ -run TestWrapCommand -count=1 -v"}
+      ],
+      "blockedBy": ["task-2.1"],
+      "agentOrchestration": {
+        "model": "sonnet",
+        "modelRationale": "Complex string building with SSH flags — requires careful escaping",
+        "delegateTo": ["tdd-guide"],
+        "mcpTools": {
+          "required": [],
+          "optional": [],
+          "details": {}
+        },
+        "skills": ["tdd-workflow"],
+        "permissionMode": "acceptEdits",
+        "estimatedComplexity": "high",
+        "wave": 3,
+        "canParallelWith": ["task-3.1", "task-3.2", "task-3.3", "task-3.5"],
+        "blockedBy": ["task-2.1"]
+      },
+      "progressTracking": {
+        "totalSteps": 5,
+        "completedSteps": 0,
+        "percentage": 0,
+        "status": "pending",
+        "activeForm": "Implementing command wrapping with SSH tunnels",
+        "checkpoints": [
+          {"step": 1, "label": "Tests written", "status": "pending"},
+          {"step": 2, "label": "WrapCommand implemented", "status": "pending"},
+          {"step": 4, "label": "Polling env vars added", "status": "pending"},
+          {"step": 5, "label": "Tests pass", "status": "pending"}
+        ]
+      }
+    },
+    "task-3.5": {
+      "id": "task-3.5",
+      "name": "SyncClaudeConfig",
+      "files": {
+        "create": [],
+        "modify": ["internal/vagrant/manager.go"],
+        "test": ["internal/vagrant/manager_test.go"]
+      },
+      "steps": [
+        {"step": 1, "action": "Write SyncClaudeConfig tests", "detail": "Test config file reading and SSH copy command generation", "command": null},
+        {"step": 2, "action": "Implement SyncClaudeConfig", "detail": "Read host Claude configs, extract HTTP/SSE ports, write to VM via vagrant ssh -c heredoc", "command": null},
+        {"step": 3, "action": "Run tests", "detail": "Verify config sync", "command": "go test ./internal/vagrant/ -run TestSyncClaudeConfig -count=1 -v"}
+      ],
+      "blockedBy": ["task-2.1"],
+      "agentOrchestration": {
+        "model": "sonnet",
+        "modelRationale": "File I/O and SSH command construction — standard sonnet work",
+        "delegateTo": ["tdd-guide"],
+        "mcpTools": {
+          "required": [],
+          "optional": [],
+          "details": {}
+        },
+        "skills": ["tdd-workflow"],
+        "permissionMode": "acceptEdits",
+        "estimatedComplexity": "medium",
+        "wave": 3,
+        "canParallelWith": ["task-3.1", "task-3.2", "task-3.3", "task-3.4"],
+        "blockedBy": ["task-2.1"]
+      },
+      "progressTracking": {
+        "totalSteps": 3,
+        "completedSteps": 0,
+        "percentage": 0,
+        "status": "pending",
+        "activeForm": "Implementing SyncClaudeConfig",
+        "checkpoints": [
+          {"step": 1, "label": "Tests written", "status": "pending"},
+          {"step": 2, "label": "Sync implemented", "status": "pending"},
+          {"step": 3, "label": "Tests pass", "status": "pending"}
+        ]
+      }
+    },
+    "task-4.1": {
+      "id": "task-4.1",
+      "name": "Instance vagrant lifecycle hooks",
+      "files": {
+        "create": [],
+        "modify": ["internal/session/instance.go"],
+        "test": ["internal/session/instance_test.go"]
+      },
+      "steps": [
+        {"step": 1, "action": "Add vagrant fields to Instance struct", "detail": "vagrantProvider VagrantProvider, lastVMHealthCheck, cleanShutdown, vmOpDone chan, vmOpInFlight atomic.Bool", "command": null},
+        {"step": 2, "action": "Add IsVagrantMode() helper", "detail": "Check UseVagrantMode from persisted tool options", "command": null},
+        {"step": 3, "action": "Implement applyVagrantWrapper in Start/StartWithMessage", "detail": "Call PreflightCheck, EnsureVagrantfile, EnsureSudoSkill, EnsureRunning, WriteMCPJsonForVagrant, SyncClaudeConfig, CollectEnvVarNames, CollectHTTPMCPPorts, WrapCommand", "command": null},
+        {"step": 4, "action": "Implement stopVagrant with goroutine + done channel", "detail": "Non-blocking suspend, signal vmOpDone on completion", "command": null},
+        {"step": 5, "action": "Implement destroyVagrant with goroutine + done channel", "detail": "Non-blocking destroy, signal vmOpDone on completion", "command": null},
+        {"step": 6, "action": "Implement waitForVagrantOp", "detail": "Select on vmOpDone with 60s timeout", "command": null},
+        {"step": 7, "action": "Wire up Stop() and Delete() hooks", "detail": "Call stopVagrant/destroyVagrant when vagrant mode, respect session count for shared VMs", "command": null},
+        {"step": 8, "action": "Wire up Start() to wait on in-flight ops", "detail": "Call waitForVagrantOp before applyVagrantWrapper", "command": null}
+      ],
+      "blockedBy": ["task-3.1", "task-3.2", "task-3.4", "task-3.5"],
+      "agentOrchestration": {
+        "model": "opus",
+        "modelRationale": "Complex integration spanning lifecycle methods with goroutine coordination — requires deep reasoning about concurrency and state management",
+        "delegateTo": ["tdd-guide", "code-reviewer"],
+        "mcpTools": {
+          "required": [],
+          "optional": ["sequential-thinking"],
+          "details": {"sequential-thinking": "Reason about goroutine/channel coordination"}
+        },
+        "skills": ["tdd-workflow"],
+        "permissionMode": "default",
+        "estimatedComplexity": "high",
+        "wave": 4,
+        "canParallelWith": ["task-4.4"],
+        "blockedBy": ["task-3.1", "task-3.2", "task-3.4", "task-3.5"]
+      },
+      "progressTracking": {
+        "totalSteps": 8,
+        "completedSteps": 0,
+        "percentage": 0,
+        "status": "pending",
+        "activeForm": "Integrating vagrant lifecycle into instance.go",
+        "checkpoints": [
+          {"step": 1, "label": "Instance fields added", "status": "pending"},
+          {"step": 3, "label": "applyVagrantWrapper implemented", "status": "pending"},
+          {"step": 6, "label": "waitForVagrantOp implemented", "status": "pending"},
+          {"step": 8, "label": "Start/Stop/Delete wired up", "status": "pending"}
+        ]
+      }
+    },
+    "task-4.2": {
+      "id": "task-4.2",
+      "name": "Vagrant restart flow",
+      "files": {
+        "create": [],
+        "modify": ["internal/session/instance.go"],
+        "test": ["internal/session/instance_test.go"]
+      },
+      "steps": [
+        {"step": 1, "action": "Write restart tests", "detail": "TestRestartVagrantSession for running/suspended/aborted/not_created states", "command": null},
+        {"step": 2, "action": "Implement restartVagrantSession", "detail": "State machine: check HealthCheck → branch by state → re-sync configs → respawn tmux", "command": null},
+        {"step": 3, "action": "Wire into Restart() method", "detail": "Call restartVagrantSession when IsVagrantMode()", "command": null},
+        {"step": 4, "action": "Run tests", "detail": "Verify all recovery paths", "command": "go test ./internal/session/ -run TestRestart -count=1 -v"}
+      ],
+      "blockedBy": ["task-4.1"],
+      "agentOrchestration": {
+        "model": "sonnet",
+        "modelRationale": "State machine implementation — standard sonnet with TDD",
+        "delegateTo": ["tdd-guide"],
+        "mcpTools": {
+          "required": [],
+          "optional": [],
+          "details": {}
+        },
+        "skills": ["tdd-workflow"],
+        "permissionMode": "acceptEdits",
+        "estimatedComplexity": "medium",
+        "wave": 4,
+        "canParallelWith": [],
+        "blockedBy": ["task-4.1"]
+      },
+      "progressTracking": {
+        "totalSteps": 4,
+        "completedSteps": 0,
+        "percentage": 0,
+        "status": "pending",
+        "activeForm": "Implementing vagrant restart flow",
+        "checkpoints": [
+          {"step": 1, "label": "Tests written", "status": "pending"},
+          {"step": 2, "label": "State machine implemented", "status": "pending"},
+          {"step": 4, "label": "Tests pass", "status": "pending"}
+        ]
+      }
+    },
+    "task-4.3": {
+      "id": "task-4.3",
+      "name": "Health check integration in UpdateStatus",
+      "files": {
+        "create": [],
+        "modify": ["internal/session/instance.go"],
+        "test": ["internal/session/instance_test.go"]
+      },
+      "steps": [
+        {"step": 1, "action": "Write health check integration tests", "detail": "TestVMHealthToErrorMessage, TestMockProviderHealthCheckIntegration", "command": null},
+        {"step": 2, "action": "Add health check to UpdateStatus", "detail": "Every 30s for vagrant sessions, set StatusError on unhealthy", "command": null},
+        {"step": 3, "action": "Add immediate health check on startup for ungraceful shutdown", "detail": "If cleanShutdown is false, check immediately", "command": null},
+        {"step": 4, "action": "Add contextual error messages", "detail": "Map VM states to user-facing messages: 'VM crashed', 'VM unresponsive', etc.", "command": null},
+        {"step": 5, "action": "Run tests", "detail": "Verify health check triggers error state", "command": "go test ./internal/session/ -run TestVMHealth -count=1 -v"}
+      ],
+      "blockedBy": ["task-4.1"],
+      "agentOrchestration": {
+        "model": "sonnet",
+        "modelRationale": "Integration into existing polling loop — standard sonnet work",
+        "delegateTo": ["tdd-guide"],
+        "mcpTools": {
+          "required": [],
+          "optional": [],
+          "details": {}
+        },
+        "skills": ["tdd-workflow"],
+        "permissionMode": "acceptEdits",
+        "estimatedComplexity": "medium",
+        "wave": 4,
+        "canParallelWith": [],
+        "blockedBy": ["task-4.1"]
+      },
+      "progressTracking": {
+        "totalSteps": 5,
+        "completedSteps": 0,
+        "percentage": 0,
+        "status": "pending",
+        "activeForm": "Integrating health check into UpdateStatus",
+        "checkpoints": [
+          {"step": 1, "label": "Tests written", "status": "pending"},
+          {"step": 2, "label": "30s polling added", "status": "pending"},
+          {"step": 4, "label": "Error messages added", "status": "pending"},
+          {"step": 5, "label": "Tests pass", "status": "pending"}
+        ]
+      }
+    },
+    "task-4.4": {
+      "id": "task-4.4",
+      "name": "Config drift + re-provision in Start",
+      "files": {
+        "create": [],
+        "modify": ["internal/session/instance.go"],
+        "test": ["internal/session/instance_test.go"]
+      },
+      "steps": [
+        {"step": 1, "action": "Write drift integration tests", "detail": "TestProvisionCalledOnDrift", "command": null},
+        {"step": 2, "action": "Add drift check after EnsureRunning in Start", "detail": "HasConfigDrift → EnsureVagrantfile → Provision → WriteConfigHash → toast", "command": null},
+        {"step": 3, "action": "Run tests", "detail": "Verify drift triggers re-provision", "command": "go test ./internal/session/ -run TestProvision -count=1 -v"}
+      ],
+      "blockedBy": ["task-3.1", "task-3.4"],
+      "agentOrchestration": {
+        "model": "haiku",
+        "modelRationale": "Simple conditional check in Start() — haiku sufficient",
+        "delegateTo": ["tdd-guide"],
+        "mcpTools": {
+          "required": [],
+          "optional": [],
+          "details": {}
+        },
+        "skills": ["tdd-workflow"],
+        "permissionMode": "acceptEdits",
+        "estimatedComplexity": "low",
+        "wave": 4,
+        "canParallelWith": ["task-4.1"],
+        "blockedBy": ["task-3.1", "task-3.4"]
+      },
+      "progressTracking": {
+        "totalSteps": 3,
+        "completedSteps": 0,
+        "percentage": 0,
+        "status": "pending",
+        "activeForm": "Adding config drift check to Start",
+        "checkpoints": [
+          {"step": 1, "label": "Tests written", "status": "pending"},
+          {"step": 2, "label": "Drift check added", "status": "pending"},
+          {"step": 3, "label": "Tests pass", "status": "pending"}
+        ]
+      }
+    },
+    "task-4.5": {
+      "id": "task-4.5",
+      "name": "Multi-session prompt + share/separate flow",
+      "files": {
+        "create": [],
+        "modify": ["internal/session/instance.go"],
+        "test": ["internal/session/instance_test.go"]
+      },
+      "steps": [
+        {"step": 1, "action": "Write multi-session integration tests", "detail": "TestForkInheritsVMSharingChoice", "command": null},
+        {"step": 2, "action": "Implement VM ownership detection in Start", "detail": "Check vagrant status + existing sessions for same project", "command": null},
+        {"step": 3, "action": "Add share/separate handling", "detail": "Share: RegisterSession + skip vagrant up. Separate: SetDotfilePath + vagrant up", "command": null},
+        {"step": 4, "action": "Fork inheritance", "detail": "Forked session inherits parent's share/separate decision", "command": null},
+        {"step": 5, "action": "Run tests", "detail": "Verify multi-session flow", "command": "go test ./internal/session/ -run TestMultiSession -count=1 -v"}
+      ],
+      "blockedBy": ["task-4.1"],
+      "agentOrchestration": {
+        "model": "sonnet",
+        "modelRationale": "Multi-session logic with user prompting — requires careful state handling",
+        "delegateTo": ["tdd-guide"],
+        "mcpTools": {
+          "required": [],
+          "optional": [],
+          "details": {}
+        },
+        "skills": ["tdd-workflow"],
+        "permissionMode": "default",
+        "estimatedComplexity": "medium",
+        "wave": 4,
+        "canParallelWith": [],
+        "blockedBy": ["task-4.1"]
+      },
+      "progressTracking": {
+        "totalSteps": 5,
+        "completedSteps": 0,
+        "percentage": 0,
+        "status": "pending",
+        "activeForm": "Implementing multi-session share/separate flow",
+        "checkpoints": [
+          {"step": 1, "label": "Tests written", "status": "pending"},
+          {"step": 2, "label": "VM detection implemented", "status": "pending"},
+          {"step": 4, "label": "Fork inheritance implemented", "status": "pending"},
+          {"step": 5, "label": "Tests pass", "status": "pending"}
+        ]
+      }
+    },
+    "task-5.1": {
+      "id": "task-5.1",
+      "name": "Vagrant mode checkbox in TUI",
+      "files": {
+        "create": [],
+        "modify": ["internal/ui/claudeoptions.go"],
+        "test": []
+      },
+      "steps": [
+        {"step": 1, "action": "Add useVagrantMode field to ClaudeOptionsPanel", "detail": "Bool field, focus index after teammate mode", "command": null},
+        {"step": 2, "action": "Add checkbox rendering", "detail": "renderCheckboxLine for 'Just do it (vagrant sudo)' below Teammate mode", "command": null},
+        {"step": 3, "action": "Implement Space toggle + force skipPermissions", "detail": "When vagrant toggled on, force skipPermissions on. When toggled off, restore previous value", "command": null},
+        {"step": 4, "action": "Update focusCount for both NewDialog and ForkDialog", "detail": "Increment by 1 for the new checkbox", "command": null},
+        {"step": 5, "action": "Update GetOptions to include UseVagrantMode", "detail": "Return UseVagrantMode in ClaudeOptions", "command": null},
+        {"step": 6, "action": "Build and verify", "detail": "go build ./...", "command": "go build ./..."}
+      ],
+      "blockedBy": ["task-1.3"],
+      "agentOrchestration": {
+        "model": "sonnet",
+        "modelRationale": "TUI component following existing checkbox pattern — standard work",
+        "delegateTo": ["code-reviewer"],
+        "mcpTools": {
+          "required": [],
+          "optional": [],
+          "details": {}
+        },
+        "skills": [],
+        "permissionMode": "acceptEdits",
+        "estimatedComplexity": "medium",
+        "wave": 5,
+        "canParallelWith": ["task-5.2", "task-5.3", "task-5.4"],
+        "blockedBy": ["task-1.3"]
+      },
+      "progressTracking": {
+        "totalSteps": 6,
+        "completedSteps": 0,
+        "percentage": 0,
+        "status": "pending",
+        "activeForm": "Adding vagrant mode checkbox to TUI",
+        "checkpoints": [
+          {"step": 1, "label": "Field added", "status": "pending"},
+          {"step": 2, "label": "Checkbox renders", "status": "pending"},
+          {"step": 3, "label": "Toggle + force logic", "status": "pending"},
+          {"step": 6, "label": "Build passes", "status": "pending"}
+        ]
+      }
+    },
+    "task-5.2": {
+      "id": "task-5.2",
+      "name": "Boot progress display",
+      "files": {
+        "create": [],
+        "modify": ["internal/ui/sessionlist.go"],
+        "test": []
+      },
+      "steps": [
+        {"step": 1, "action": "Add boot phase and elapsed timer to session list rendering", "detail": "Show 'my-project ⟳ Provisioning... (2m 34s)' for vagrant sessions during boot", "command": null},
+        {"step": 2, "action": "Add tip display in detail pane", "detail": "Show rotating tips (8s interval) in right-side detail pane during boot", "command": null},
+        {"step": 3, "action": "Stop tips on BootPhaseReady", "detail": "Clear tip display and hide box when VM reaches ready state", "command": null},
+        {"step": 4, "action": "Build and verify", "detail": "go build ./...", "command": "go build ./..."}
+      ],
+      "blockedBy": ["task-4.1", "task-3.3"],
+      "agentOrchestration": {
+        "model": "sonnet",
+        "modelRationale": "TUI rendering with timer and state transitions — sonnet handles Bubble Tea well",
+        "delegateTo": [],
+        "mcpTools": {
+          "required": [],
+          "optional": ["context7"],
+          "details": {"context7": "Bubble Tea component patterns"}
+        },
+        "skills": [],
+        "permissionMode": "acceptEdits",
+        "estimatedComplexity": "medium",
+        "wave": 5,
+        "canParallelWith": ["task-5.1", "task-5.3", "task-5.4"],
+        "blockedBy": ["task-4.1", "task-3.3"]
+      },
+      "progressTracking": {
+        "totalSteps": 4,
+        "completedSteps": 0,
+        "percentage": 0,
+        "status": "pending",
+        "activeForm": "Adding boot progress display to session list",
+        "checkpoints": [
+          {"step": 1, "label": "Phase + timer rendering", "status": "pending"},
+          {"step": 2, "label": "Tip display added", "status": "pending"},
+          {"step": 4, "label": "Build passes", "status": "pending"}
+        ]
+      }
+    },
+    "task-5.3": {
+      "id": "task-5.3",
+      "name": "Stale VM cleanup (Shift+D)",
+      "files": {
+        "create": [],
+        "modify": ["internal/ui/app.go", "internal/ui/cleanup_dialog.go"],
+        "test": []
+      },
+      "steps": [
+        {"step": 1, "action": "Implement checkStaleSuspendedVMs", "detail": "Background goroutine on startup + after session stop, threshold=3", "command": null},
+        {"step": 2, "action": "Implement ListSuspendedAgentDeckVMs", "detail": "vagrant global-status --machine-readable, cross-reference with agent-deck sessions", "command": null},
+        {"step": 3, "action": "Create cleanup dialog TUI component", "detail": "Shift+D keybinding, checkbox list with project paths, suspend age, estimated size", "command": null},
+        {"step": 4, "action": "Implement DestroySuspendedVMs", "detail": "Sequential vagrant destroy -f for selected VMs, progress inline", "command": null},
+        {"step": 5, "action": "Build and verify", "detail": "go build ./...", "command": "go build ./..."}
+      ],
+      "blockedBy": ["task-4.1"],
+      "agentOrchestration": {
+        "model": "sonnet",
+        "modelRationale": "TUI dialog with background subprocess management — standard sonnet work",
+        "delegateTo": [],
+        "mcpTools": {
+          "required": [],
+          "optional": [],
+          "details": {}
+        },
+        "skills": [],
+        "permissionMode": "acceptEdits",
+        "estimatedComplexity": "medium",
+        "wave": 5,
+        "canParallelWith": ["task-5.1", "task-5.2", "task-5.4"],
+        "blockedBy": ["task-4.1"]
+      },
+      "progressTracking": {
+        "totalSteps": 5,
+        "completedSteps": 0,
+        "percentage": 0,
+        "status": "pending",
+        "activeForm": "Implementing stale VM cleanup dialog",
+        "checkpoints": [
+          {"step": 1, "label": "Stale detection implemented", "status": "pending"},
+          {"step": 3, "label": "Cleanup dialog created", "status": "pending"},
+          {"step": 5, "label": "Build passes", "status": "pending"}
+        ]
+      }
+    },
+    "task-5.4": {
+      "id": "task-5.4",
+      "name": "Apple Silicon kext detection in TUI",
+      "files": {
+        "create": [],
+        "modify": ["internal/session/instance.go"],
+        "test": []
+      },
+      "steps": [
+        {"step": 1, "action": "Ensure wrapVagrantUpError is called in applyVagrantWrapper", "detail": "Catch stderr from vagrant up and wrap with user-friendly message", "command": null},
+        {"step": 2, "action": "Surface wrapped error in TUI", "detail": "Show 'VirtualBox requires approval in System Settings' in session status", "command": null},
+        {"step": 3, "action": "Build and verify", "detail": "go build ./...", "command": "go build ./..."}
+      ],
+      "blockedBy": ["task-4.1", "task-2.3"],
+      "agentOrchestration": {
+        "model": "haiku",
+        "modelRationale": "Simple error surfacing — haiku sufficient",
+        "delegateTo": [],
+        "mcpTools": {
+          "required": [],
+          "optional": [],
+          "details": {}
+        },
+        "skills": [],
+        "permissionMode": "acceptEdits",
+        "estimatedComplexity": "low",
+        "wave": 5,
+        "canParallelWith": ["task-5.1", "task-5.2", "task-5.3"],
+        "blockedBy": ["task-4.1", "task-2.3"]
+      },
+      "progressTracking": {
+        "totalSteps": 3,
+        "completedSteps": 0,
+        "percentage": 0,
+        "status": "pending",
+        "activeForm": "Adding Apple Silicon kext detection to TUI",
+        "checkpoints": [
+          {"step": 1, "label": "Error wrapping wired in", "status": "pending"},
+          {"step": 2, "label": "Error surfaced in TUI", "status": "pending"},
+          {"step": 3, "label": "Build passes", "status": "pending"}
+        ]
+      }
+    },
+    "task-6.1": {
+      "id": "task-6.1",
+      "name": "MockVagrantProvider + interface check",
+      "files": {
+        "create": ["internal/vagrant/mock_provider_test.go"],
+        "modify": [],
+        "test": ["internal/vagrant/mock_provider_test.go"]
+      },
+      "steps": [
+        {"step": 1, "action": "Create MockVagrantProvider struct", "detail": "Configurable return values per method: installed, status, health, errors, sessionCount, configDrift, wrappedCmd", "command": null},
+        {"step": 2, "action": "Implement all VagrantProvider methods on mock", "detail": "Return configured values", "command": null},
+        {"step": 3, "action": "Add compile-time interface check", "detail": "var _ VagrantProvider = (*MockVagrantProvider)(nil)", "command": null},
+        {"step": 4, "action": "Add compile-time Manager check", "detail": "TestManagerImplementsVagrantProvider", "command": null},
+        {"step": 5, "action": "Run tests", "detail": "Verify compilation", "command": "go test ./internal/vagrant/ -run TestManager -count=1 -v"}
+      ],
+      "blockedBy": ["task-2.1"],
+      "agentOrchestration": {
+        "model": "haiku",
+        "modelRationale": "Boilerplate mock struct — haiku handles this well",
+        "delegateTo": [],
+        "mcpTools": {
+          "required": [],
+          "optional": [],
+          "details": {}
+        },
+        "skills": [],
+        "permissionMode": "acceptEdits",
+        "estimatedComplexity": "low",
+        "wave": 6,
+        "canParallelWith": ["task-6.2", "task-6.3", "task-6.4", "task-6.5", "task-6.6", "task-6.7", "task-6.8", "task-6.9"],
+        "blockedBy": ["task-2.1"]
+      },
+      "progressTracking": {
+        "totalSteps": 5,
+        "completedSteps": 0,
+        "percentage": 0,
+        "status": "pending",
+        "activeForm": "Creating MockVagrantProvider",
+        "checkpoints": [
+          {"step": 1, "label": "Mock struct created", "status": "pending"},
+          {"step": 3, "label": "Interface check compiles", "status": "pending"},
+          {"step": 5, "label": "Tests pass", "status": "pending"}
+        ]
+      }
+    },
+    "task-6.2": {
+      "id": "task-6.2",
+      "name": "Manager unit tests",
+      "files": {
+        "create": [],
+        "modify": ["internal/vagrant/manager_test.go"],
+        "test": ["internal/vagrant/manager_test.go"]
+      },
+      "steps": [
+        {"step": 1, "action": "Verify all manager tests pass", "detail": "Run full test suite for vagrant package", "command": "go test ./internal/vagrant/ -count=1 -v"},
+        {"step": 2, "action": "Add any missing test cases from design doc", "detail": "Cross-reference testing strategy section", "command": null},
+        {"step": 3, "action": "Check coverage", "detail": "go test ./internal/vagrant/ -coverprofile=coverage.out", "command": "go test ./internal/vagrant/ -coverprofile=coverage.out && go tool cover -func=coverage.out"}
+      ],
+      "blockedBy": ["task-2.1", "task-2.2", "task-2.3", "task-2.4", "task-2.5", "task-2.6", "task-2.7", "task-3.4"],
+      "agentOrchestration": {
+        "model": "sonnet",
+        "modelRationale": "Test verification and coverage analysis",
+        "delegateTo": ["tdd-guide"],
+        "mcpTools": {
+          "required": [],
+          "optional": [],
+          "details": {}
+        },
+        "skills": ["tdd-workflow"],
+        "permissionMode": "acceptEdits",
+        "estimatedComplexity": "medium",
+        "wave": 6,
+        "canParallelWith": ["task-6.1", "task-6.3", "task-6.4", "task-6.5", "task-6.6", "task-6.7", "task-6.8", "task-6.9"],
+        "blockedBy": ["task-2.1", "task-2.2", "task-2.3", "task-2.4", "task-2.5", "task-2.6", "task-2.7", "task-3.4"]
+      },
+      "progressTracking": {
+        "totalSteps": 3,
+        "completedSteps": 0,
+        "percentage": 0,
+        "status": "pending",
+        "activeForm": "Verifying manager unit tests",
+        "checkpoints": [
+          {"step": 1, "label": "All tests pass", "status": "pending"},
+          {"step": 2, "label": "Missing tests added", "status": "pending"},
+          {"step": 3, "label": "Coverage ≥80%", "status": "pending"}
+        ]
+      }
+    },
+    "task-6.3": {
+      "id": "task-6.3",
+      "name": "MCP unit tests",
+      "files": {
+        "create": [],
+        "modify": ["internal/vagrant/mcp_test.go"],
+        "test": ["internal/vagrant/mcp_test.go"]
+      },
+      "steps": [
+        {"step": 1, "action": "Verify all MCP tests pass", "detail": "Run MCP-specific tests", "command": "go test ./internal/vagrant/ -run TestMCP -count=1 -v"},
+        {"step": 2, "action": "Add edge case tests", "detail": "Empty MCPs, non-localhost URLs, duplicate ports", "command": null}
+      ],
+      "blockedBy": ["task-3.1"],
+      "agentOrchestration": {
+        "model": "haiku",
+        "modelRationale": "Test verification — haiku sufficient",
+        "delegateTo": ["tdd-guide"],
+        "mcpTools": {
+          "required": [],
+          "optional": [],
+          "details": {}
+        },
+        "skills": ["tdd-workflow"],
+        "permissionMode": "acceptEdits",
+        "estimatedComplexity": "low",
+        "wave": 6,
+        "canParallelWith": ["task-6.1", "task-6.2", "task-6.4", "task-6.5", "task-6.6", "task-6.7", "task-6.8", "task-6.9"],
+        "blockedBy": ["task-3.1"]
+      },
+      "progressTracking": {
+        "totalSteps": 2,
+        "completedSteps": 0,
+        "percentage": 0,
+        "status": "pending",
+        "activeForm": "Verifying MCP unit tests",
+        "checkpoints": [
+          {"step": 1, "label": "All MCP tests pass", "status": "pending"},
+          {"step": 2, "label": "Edge cases covered", "status": "pending"}
+        ]
+      }
+    },
+    "task-6.4": {
+      "id": "task-6.4",
+      "name": "Health check unit tests",
+      "files": {
+        "create": [],
+        "modify": ["internal/vagrant/manager_test.go"],
+        "test": ["internal/vagrant/manager_test.go"]
+      },
+      "steps": [
+        {"step": 1, "action": "Verify health check tests pass", "detail": "Run health-specific tests", "command": "go test ./internal/vagrant/ -run TestHealthCheck -count=1 -v"},
+        {"step": 2, "action": "Add timeout edge case", "detail": "TestHealthCheckPhase2Timeout confirms 5s behavior", "command": null}
+      ],
+      "blockedBy": ["task-2.5"],
+      "agentOrchestration": {
+        "model": "haiku",
+        "modelRationale": "Test verification — haiku sufficient",
+        "delegateTo": ["tdd-guide"],
+        "mcpTools": {
+          "required": [],
+          "optional": [],
+          "details": {}
+        },
+        "skills": ["tdd-workflow"],
+        "permissionMode": "acceptEdits",
+        "estimatedComplexity": "low",
+        "wave": 6,
+        "canParallelWith": ["task-6.1", "task-6.2", "task-6.3", "task-6.5", "task-6.6", "task-6.7", "task-6.8", "task-6.9"],
+        "blockedBy": ["task-2.5"]
+      },
+      "progressTracking": {
+        "totalSteps": 2,
+        "completedSteps": 0,
+        "percentage": 0,
+        "status": "pending",
+        "activeForm": "Verifying health check unit tests",
+        "checkpoints": [
+          {"step": 1, "label": "Health tests pass", "status": "pending"},
+          {"step": 2, "label": "Timeout edge case covered", "status": "pending"}
+        ]
+      }
+    },
+    "task-6.5": {
+      "id": "task-6.5",
+      "name": "Instance lifecycle unit tests with mock",
+      "files": {
+        "create": [],
+        "modify": ["internal/session/instance_test.go"],
+        "test": ["internal/session/instance_test.go"]
+      },
+      "steps": [
+        {"step": 1, "action": "Write mock provider lifecycle tests", "detail": "TestMockProviderStartLifecycle, TestMockProviderStopSuspends, TestMockProviderHealthCheckIntegration, TestMockProviderRestartRecovery, TestStartWaitsForInFlightSuspend, TestStartTimeoutOnHungSuspend", "command": null},
+        {"step": 2, "action": "Run tests", "detail": "Verify all lifecycle paths with mock", "command": "go test ./internal/session/ -run TestMockProvider -count=1 -v"}
+      ],
+      "blockedBy": ["task-4.1", "task-4.2", "task-4.3", "task-6.1"],
+      "agentOrchestration": {
+        "model": "sonnet",
+        "modelRationale": "Integration tests with mock — requires understanding lifecycle flow",
+        "delegateTo": ["tdd-guide"],
+        "mcpTools": {
+          "required": [],
+          "optional": [],
+          "details": {}
+        },
+        "skills": ["tdd-workflow"],
+        "permissionMode": "acceptEdits",
+        "estimatedComplexity": "medium",
+        "wave": 6,
+        "canParallelWith": ["task-6.1", "task-6.2", "task-6.3", "task-6.4", "task-6.6", "task-6.7", "task-6.8", "task-6.9"],
+        "blockedBy": ["task-4.1", "task-4.2", "task-4.3", "task-6.1"]
+      },
+      "progressTracking": {
+        "totalSteps": 2,
+        "completedSteps": 0,
+        "percentage": 0,
+        "status": "pending",
+        "activeForm": "Writing instance lifecycle tests with mock",
+        "checkpoints": [
+          {"step": 1, "label": "Mock lifecycle tests written", "status": "pending"},
+          {"step": 2, "label": "Tests pass", "status": "pending"}
+        ]
+      }
+    },
+    "task-6.6": {
+      "id": "task-6.6",
+      "name": "Credential guard tests",
+      "files": {
+        "create": [],
+        "modify": ["internal/vagrant/skill_test.go"],
+        "test": ["internal/vagrant/skill_test.go"]
+      },
+      "steps": [
+        {"step": 1, "action": "Verify credential guard tests pass", "detail": "Run credential-specific tests", "command": "go test ./internal/vagrant/ -run TestCredential -count=1 -v"},
+        {"step": 2, "action": "Add rsync exclusion test", "detail": "TestRsyncExcludesCredentialFiles", "command": null}
+      ],
+      "blockedBy": ["task-3.2"],
+      "agentOrchestration": {
+        "model": "haiku",
+        "modelRationale": "Test verification — haiku sufficient",
+        "delegateTo": ["tdd-guide"],
+        "mcpTools": {
+          "required": [],
+          "optional": [],
+          "details": {}
+        },
+        "skills": ["tdd-workflow"],
+        "permissionMode": "acceptEdits",
+        "estimatedComplexity": "low",
+        "wave": 6,
+        "canParallelWith": ["task-6.1", "task-6.2", "task-6.3", "task-6.4", "task-6.5", "task-6.7", "task-6.8", "task-6.9"],
+        "blockedBy": ["task-3.2"]
+      },
+      "progressTracking": {
+        "totalSteps": 2,
+        "completedSteps": 0,
+        "percentage": 0,
+        "status": "pending",
+        "activeForm": "Verifying credential guard tests",
+        "checkpoints": [
+          {"step": 1, "label": "Credential tests pass", "status": "pending"},
+          {"step": 2, "label": "Rsync exclusion tested", "status": "pending"}
+        ]
+      }
+    },
+    "task-6.7": {
+      "id": "task-6.7",
+      "name": "Config drift tests",
+      "files": {
+        "create": [],
+        "modify": ["internal/vagrant/manager_test.go"],
+        "test": ["internal/vagrant/manager_test.go"]
+      },
+      "steps": [
+        {"step": 1, "action": "Verify config drift tests pass", "detail": "Run drift-specific tests", "command": "go test ./internal/vagrant/ -run TestConfigHash -count=1 -v"}
+      ],
+      "blockedBy": ["task-2.6"],
+      "agentOrchestration": {
+        "model": "haiku",
+        "modelRationale": "Test verification — haiku sufficient",
+        "delegateTo": [],
+        "mcpTools": {
+          "required": [],
+          "optional": [],
+          "details": {}
+        },
+        "skills": [],
+        "permissionMode": "acceptEdits",
+        "estimatedComplexity": "low",
+        "wave": 6,
+        "canParallelWith": ["task-6.1", "task-6.2", "task-6.3", "task-6.4", "task-6.5", "task-6.6", "task-6.8", "task-6.9"],
+        "blockedBy": ["task-2.6"]
+      },
+      "progressTracking": {
+        "totalSteps": 1,
+        "completedSteps": 0,
+        "percentage": 0,
+        "status": "pending",
+        "activeForm": "Verifying config drift tests",
+        "checkpoints": [
+          {"step": 1, "label": "Drift tests pass", "status": "pending"}
+        ]
+      }
+    },
+    "task-6.8": {
+      "id": "task-6.8",
+      "name": "Tips tests",
+      "files": {
+        "create": [],
+        "modify": ["internal/vagrant/tips_test.go"],
+        "test": ["internal/vagrant/tips_test.go"]
+      },
+      "steps": [
+        {"step": 1, "action": "Verify tips tests pass", "detail": "Run tip-specific tests", "command": "go test ./internal/vagrant/ -run TestTip -count=1 -v"}
+      ],
+      "blockedBy": ["task-3.3"],
+      "agentOrchestration": {
+        "model": "haiku",
+        "modelRationale": "Test verification — haiku sufficient",
+        "delegateTo": [],
+        "mcpTools": {
+          "required": [],
+          "optional": [],
+          "details": {}
+        },
+        "skills": [],
+        "permissionMode": "acceptEdits",
+        "estimatedComplexity": "low",
+        "wave": 6,
+        "canParallelWith": ["task-6.1", "task-6.2", "task-6.3", "task-6.4", "task-6.5", "task-6.6", "task-6.7", "task-6.9"],
+        "blockedBy": ["task-3.3"]
+      },
+      "progressTracking": {
+        "totalSteps": 1,
+        "completedSteps": 0,
+        "percentage": 0,
+        "status": "pending",
+        "activeForm": "Verifying tips tests",
+        "checkpoints": [
+          {"step": 1, "label": "Tips tests pass", "status": "pending"}
+        ]
+      }
+    },
+    "task-6.9": {
+      "id": "task-6.9",
+      "name": "UI tests",
+      "files": {
+        "create": [],
+        "modify": ["internal/ui/claudeoptions_test.go"],
+        "test": ["internal/ui/claudeoptions_test.go"]
+      },
+      "steps": [
+        {"step": 1, "action": "Write UI tests", "detail": "TestCheckboxRendersAfterTeammateMode, TestSpaceTogglesVagrantMode, TestVagrantForcesSkipPermissions, TestErrorShowsVMCrashedMessage", "command": null},
+        {"step": 2, "action": "Run tests", "detail": "Verify UI behavior", "command": "go test ./internal/ui/ -run TestCheckbox -count=1 -v"}
+      ],
+      "blockedBy": ["task-5.1"],
+      "agentOrchestration": {
+        "model": "sonnet",
+        "modelRationale": "UI testing requires understanding Bubble Tea test patterns",
+        "delegateTo": ["tdd-guide"],
+        "mcpTools": {
+          "required": [],
+          "optional": ["context7"],
+          "details": {"context7": "Bubble Tea testing patterns"}
+        },
+        "skills": ["tdd-workflow"],
+        "permissionMode": "acceptEdits",
+        "estimatedComplexity": "medium",
+        "wave": 6,
+        "canParallelWith": ["task-6.1", "task-6.2", "task-6.3", "task-6.4", "task-6.5", "task-6.6", "task-6.7", "task-6.8"],
+        "blockedBy": ["task-5.1"]
+      },
+      "progressTracking": {
+        "totalSteps": 2,
+        "completedSteps": 0,
+        "percentage": 0,
+        "status": "pending",
+        "activeForm": "Writing UI tests for vagrant checkbox",
+        "checkpoints": [
+          {"step": 1, "label": "UI tests written", "status": "pending"},
+          {"step": 2, "label": "Tests pass", "status": "pending"}
+        ]
+      }
+    }
+  },
+  "phases": [
+    {
+      "id": "phase-1",
+      "name": "Foundation (Config & Types)",
+      "description": "Establish the type system, interfaces, and config structures that all subsequent tasks depend on.",
+      "tasks": ["task-1.1", "task-1.2", "task-1.3"]
+    },
+    {
+      "id": "phase-2",
+      "name": "Core Vagrant Manager",
+      "description": "Build the VagrantManager with full lifecycle management, Vagrantfile generation, preflight checks, health monitoring, drift detection, and multi-session support.",
+      "tasks": ["task-2.1", "task-2.2", "task-2.3", "task-2.4", "task-2.5", "task-2.6", "task-2.7"]
+    },
+    {
+      "id": "phase-3",
+      "name": "MCP & Skill Integration",
+      "description": "MCP config generation for Vagrant VMs, SSH reverse tunnel support, sudo skill with credential guard, loading tips, and command wrapping.",
+      "tasks": ["task-3.1", "task-3.2", "task-3.3", "task-3.4", "task-3.5"]
+    },
+    {
+      "id": "phase-4",
+      "name": "Instance Lifecycle Integration",
+      "description": "Wire Vagrant lifecycle into instance.go — start/stop/restart hooks, health monitoring, config drift handling, and multi-session prompting.",
+      "tasks": ["task-4.1", "task-4.2", "task-4.3", "task-4.4", "task-4.5"]
+    },
+    {
+      "id": "phase-5",
+      "name": "UI Integration",
+      "description": "TUI checkbox, boot progress display, stale VM cleanup dialog, and Apple Silicon detection.",
+      "tasks": ["task-5.1", "task-5.2", "task-5.3", "task-5.4"]
+    },
+    {
+      "id": "phase-6",
+      "name": "Testing & Hardening",
+      "description": "Mock provider, comprehensive unit tests across all modules, coverage verification.",
+      "tasks": ["task-6.1", "task-6.2", "task-6.3", "task-6.4", "task-6.5", "task-6.6", "task-6.7", "task-6.8", "task-6.9"]
+    }
+  ]
+}
