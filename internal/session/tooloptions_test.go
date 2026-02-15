@@ -744,3 +744,102 @@ func TestClaudeOptions_RoundTrip(t *testing.T) {
 		t.Errorf("round-trip failed: original=%+v, restored=%+v", original, restored)
 	}
 }
+
+// TestClaudeOptionsVagrantModeForceSkipPermissions verifies that UseVagrantMode
+// forces SkipPermissions in both ToArgs() and ToArgsForFork()
+func TestClaudeOptionsVagrantModeForceSkipPermissions(t *testing.T) {
+	tests := []struct {
+		name     string
+		opts     ClaudeOptions
+		expected []string
+	}{
+		{
+			name: "vagrant mode forces skip permissions in ToArgs",
+			opts: ClaudeOptions{
+				UseVagrantMode:  true,
+				SkipPermissions: false,
+			},
+			expected: []string{"--dangerously-skip-permissions"},
+		},
+		{
+			name: "vagrant mode with skip permissions already true",
+			opts: ClaudeOptions{
+				UseVagrantMode:  true,
+				SkipPermissions: true,
+			},
+			expected: []string{"--dangerously-skip-permissions"},
+		},
+		{
+			name: "vagrant mode with other flags",
+			opts: ClaudeOptions{
+				UseVagrantMode:  true,
+				SkipPermissions: false,
+				UseChrome:       true,
+				UseTeammateMode: true,
+			},
+			expected: []string{"--dangerously-skip-permissions", "--chrome", "--teammate-mode", "tmux"},
+		},
+		{
+			name: "vagrant mode does not interfere with session modes",
+			opts: ClaudeOptions{
+				SessionMode:     "continue",
+				UseVagrantMode:  true,
+				SkipPermissions: false,
+			},
+			expected: []string{"-c", "--dangerously-skip-permissions"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.opts.ToArgs()
+			if !reflect.DeepEqual(got, tt.expected) {
+				t.Errorf("ToArgs() = %v, expected %v", got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestClaudeOptionsVagrantModeForceSkipPermissions_Fork(t *testing.T) {
+	tests := []struct {
+		name     string
+		opts     ClaudeOptions
+		expected []string
+	}{
+		{
+			name: "vagrant mode forces skip permissions in ToArgsForFork",
+			opts: ClaudeOptions{
+				UseVagrantMode:  true,
+				SkipPermissions: false,
+			},
+			expected: []string{"--dangerously-skip-permissions"},
+		},
+		{
+			name: "vagrant mode with skip permissions already true for fork",
+			opts: ClaudeOptions{
+				UseVagrantMode:  true,
+				SkipPermissions: true,
+			},
+			expected: []string{"--dangerously-skip-permissions"},
+		},
+		{
+			name: "vagrant mode with other flags for fork",
+			opts: ClaudeOptions{
+				UseVagrantMode:  true,
+				SkipPermissions: false,
+				UseChrome:       true,
+				UseTeammateMode: true,
+			},
+			expected: []string{"--dangerously-skip-permissions", "--chrome", "--teammate-mode", "tmux"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.opts.ToArgsForFork()
+			if !reflect.DeepEqual(got, tt.expected) {
+				t.Errorf("ToArgsForFork() = %v, expected %v", got, tt.expected)
+			}
+		})
+	}
+}

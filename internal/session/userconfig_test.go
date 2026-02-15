@@ -711,3 +711,204 @@ inject_status_line = true
 		t.Error("GetInjectStatusLine should be true when set to true")
 	}
 }
+
+// ============================================================================
+// Vagrant Settings Tests
+// ============================================================================
+
+func TestGetVagrantSettingsDefaults(t *testing.T) {
+	// Test that default values are applied when section not present
+	tempDir := t.TempDir()
+	originalHome := os.Getenv("HOME")
+	os.Setenv("HOME", tempDir)
+	defer os.Setenv("HOME", originalHome)
+	ClearUserConfigCache()
+
+	// With no config file, GetVagrantSettings should return defaults
+	settings := GetVagrantSettings()
+	if settings.MemoryMB != 4096 {
+		t.Errorf("MemoryMB should default to 4096, got %d", settings.MemoryMB)
+	}
+	if settings.CPUs != 2 {
+		t.Errorf("CPUs should default to 2, got %d", settings.CPUs)
+	}
+	if settings.Box != "bento/ubuntu-24.04" {
+		t.Errorf("Box should default to bento/ubuntu-24.04, got %s", settings.Box)
+	}
+	if settings.AutoSuspend == nil || !*settings.AutoSuspend {
+		t.Error("AutoSuspend should default to true")
+	}
+	if settings.AutoDestroy {
+		t.Error("AutoDestroy should default to false")
+	}
+	if settings.HostGatewayIP != "10.0.2.2" {
+		t.Errorf("HostGatewayIP should default to 10.0.2.2, got %s", settings.HostGatewayIP)
+	}
+	if settings.SyncedFolderType != "virtualbox" {
+		t.Errorf("SyncedFolderType should default to virtualbox, got %s", settings.SyncedFolderType)
+	}
+	if settings.HealthCheckInterval != 30 {
+		t.Errorf("HealthCheckInterval should default to 30, got %d", settings.HealthCheckInterval)
+	}
+	if settings.ForwardProxyEnv == nil || !*settings.ForwardProxyEnv {
+		t.Error("ForwardProxyEnv should default to true")
+	}
+	if settings.ProvisionPackages != nil {
+		t.Errorf("ProvisionPackages should be nil, got %v", settings.ProvisionPackages)
+	}
+	if settings.ProvisionPkgExclude != nil {
+		t.Errorf("ProvisionPkgExclude should be nil, got %v", settings.ProvisionPkgExclude)
+	}
+	if settings.NpmPackages != nil {
+		t.Errorf("NpmPackages should be nil, got %v", settings.NpmPackages)
+	}
+	if settings.ProvisionScript != "" {
+		t.Errorf("ProvisionScript should be empty, got %s", settings.ProvisionScript)
+	}
+	if settings.Vagrantfile != "" {
+		t.Errorf("Vagrantfile should be empty, got %s", settings.Vagrantfile)
+	}
+	if settings.PortForwards != nil {
+		t.Errorf("PortForwards should be nil, got %v", settings.PortForwards)
+	}
+	if settings.Env != nil {
+		t.Errorf("Env should be nil, got %v", settings.Env)
+	}
+}
+
+func TestGetVagrantSettingsOverrides(t *testing.T) {
+	tempDir := t.TempDir()
+	originalHome := os.Getenv("HOME")
+	os.Setenv("HOME", tempDir)
+	defer os.Setenv("HOME", originalHome)
+	ClearUserConfigCache()
+
+	// Create config with custom vagrant settings
+	agentDeckDir := filepath.Join(tempDir, ".agent-deck")
+	_ = os.MkdirAll(agentDeckDir, 0700)
+
+	configPath := filepath.Join(agentDeckDir, "config.toml")
+	configContent := `
+[vagrant]
+memory_mb = 8192
+cpus = 4
+box = "ubuntu/jammy64"
+auto_suspend = false
+auto_destroy = true
+host_gateway_ip = "192.168.1.1"
+synced_folder_type = "nfs"
+provision_packages = ["vim", "htop"]
+provision_packages_exclude = ["nano"]
+npm_packages = ["typescript", "eslint"]
+provision_script = "/path/to/script.sh"
+vagrantfile = "/path/to/Vagrantfile"
+health_check_interval = 60
+forward_proxy_env = false
+
+[[vagrant.port_forwards]]
+guest = 3000
+host = 3000
+protocol = "tcp"
+
+[[vagrant.port_forwards]]
+guest = 8080
+host = 8080
+protocol = "tcp"
+
+[vagrant.env]
+FOO = "bar"
+BAZ = "qux"
+`
+	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+		t.Fatalf("Failed to write config: %v", err)
+	}
+	ClearUserConfigCache()
+
+	settings := GetVagrantSettings()
+	if settings.MemoryMB != 8192 {
+		t.Errorf("MemoryMB: got %d, want 8192", settings.MemoryMB)
+	}
+	if settings.CPUs != 4 {
+		t.Errorf("CPUs: got %d, want 4", settings.CPUs)
+	}
+	if settings.Box != "ubuntu/jammy64" {
+		t.Errorf("Box: got %s, want ubuntu/jammy64", settings.Box)
+	}
+	if settings.AutoSuspend == nil || *settings.AutoSuspend {
+		t.Error("AutoSuspend should be false")
+	}
+	if !settings.AutoDestroy {
+		t.Error("AutoDestroy should be true")
+	}
+	if settings.HostGatewayIP != "192.168.1.1" {
+		t.Errorf("HostGatewayIP: got %s, want 192.168.1.1", settings.HostGatewayIP)
+	}
+	if settings.SyncedFolderType != "nfs" {
+		t.Errorf("SyncedFolderType: got %s, want nfs", settings.SyncedFolderType)
+	}
+	if len(settings.ProvisionPackages) != 2 || settings.ProvisionPackages[0] != "vim" || settings.ProvisionPackages[1] != "htop" {
+		t.Errorf("ProvisionPackages: got %v, want [vim, htop]", settings.ProvisionPackages)
+	}
+	if len(settings.ProvisionPkgExclude) != 1 || settings.ProvisionPkgExclude[0] != "nano" {
+		t.Errorf("ProvisionPkgExclude: got %v, want [nano]", settings.ProvisionPkgExclude)
+	}
+	if len(settings.NpmPackages) != 2 || settings.NpmPackages[0] != "typescript" || settings.NpmPackages[1] != "eslint" {
+		t.Errorf("NpmPackages: got %v, want [typescript, eslint]", settings.NpmPackages)
+	}
+	if settings.ProvisionScript != "/path/to/script.sh" {
+		t.Errorf("ProvisionScript: got %s, want /path/to/script.sh", settings.ProvisionScript)
+	}
+	if settings.Vagrantfile != "/path/to/Vagrantfile" {
+		t.Errorf("Vagrantfile: got %s, want /path/to/Vagrantfile", settings.Vagrantfile)
+	}
+	if settings.HealthCheckInterval != 60 {
+		t.Errorf("HealthCheckInterval: got %d, want 60", settings.HealthCheckInterval)
+	}
+	if settings.ForwardProxyEnv == nil || *settings.ForwardProxyEnv {
+		t.Error("ForwardProxyEnv should be false")
+	}
+	if len(settings.PortForwards) != 2 {
+		t.Errorf("PortForwards length: got %d, want 2", len(settings.PortForwards))
+	} else {
+		if settings.PortForwards[0].Guest != 3000 || settings.PortForwards[0].Host != 3000 || settings.PortForwards[0].Protocol != "tcp" {
+			t.Errorf("PortForwards[0]: got %+v, want {Guest:3000 Host:3000 Protocol:tcp}", settings.PortForwards[0])
+		}
+		if settings.PortForwards[1].Guest != 8080 || settings.PortForwards[1].Host != 8080 || settings.PortForwards[1].Protocol != "tcp" {
+			t.Errorf("PortForwards[1]: got %+v, want {Guest:8080 Host:8080 Protocol:tcp}", settings.PortForwards[1])
+		}
+	}
+	if len(settings.Env) != 2 || settings.Env["FOO"] != "bar" || settings.Env["BAZ"] != "qux" {
+		t.Errorf("Env: got %v, want map[FOO:bar BAZ:qux]", settings.Env)
+	}
+}
+
+func TestVagrantConfig_TOML(t *testing.T) {
+	// Test parsing explicit TOML config
+	tmpDir := t.TempDir()
+	configContent := `
+[vagrant]
+memory_mb = 2048
+cpus = 1
+box = "debian/bullseye64"
+`
+	configPath := filepath.Join(tmpDir, "config.toml")
+	if err := os.WriteFile(configPath, []byte(configContent), 0600); err != nil {
+		t.Fatalf("Failed to write config file: %v", err)
+	}
+
+	var config UserConfig
+	_, err := toml.DecodeFile(configPath, &config)
+	if err != nil {
+		t.Fatalf("Failed to decode: %v", err)
+	}
+
+	if config.Vagrant.MemoryMB != 2048 {
+		t.Errorf("Expected MemoryMB 2048, got %d", config.Vagrant.MemoryMB)
+	}
+	if config.Vagrant.CPUs != 1 {
+		t.Errorf("Expected CPUs 1, got %d", config.Vagrant.CPUs)
+	}
+	if config.Vagrant.Box != "debian/bullseye64" {
+		t.Errorf("Expected Box debian/bullseye64, got %s", config.Vagrant.Box)
+	}
+}

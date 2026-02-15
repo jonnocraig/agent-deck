@@ -29,6 +29,8 @@ type ClaudeOptions struct {
 	UseChrome bool `json:"use_chrome,omitempty"`
 	// UseTeammateMode adds --teammate-mode tmux flag
 	UseTeammateMode bool `json:"use_teammate_mode,omitempty"`
+	// UseVagrantMode enables Vagrant VM mode and forces --dangerously-skip-permissions
+	UseVagrantMode bool `json:"use_vagrant_mode,omitempty"`
 
 	// Transient fields for worktree fork (not persisted)
 	WorkDir          string `json:"-"`
@@ -58,7 +60,8 @@ func (o *ClaudeOptions) ToArgs() []string {
 	// "new" or empty = default behavior, no special flag
 
 	// Permission flags (mutually exclusive, SkipPermissions takes precedence)
-	if o.SkipPermissions {
+	// Vagrant mode forces skip permissions
+	if o.SkipPermissions || o.UseVagrantMode {
 		args = append(args, "--dangerously-skip-permissions")
 	} else if o.AllowSkipPermissions {
 		args = append(args, "--allow-dangerously-skip-permissions")
@@ -78,7 +81,8 @@ func (o *ClaudeOptions) ToArgs() []string {
 func (o *ClaudeOptions) ToArgsForFork() []string {
 	var args []string
 
-	if o.SkipPermissions {
+	// Permission flags (vagrant mode forces skip permissions)
+	if o.SkipPermissions || o.UseVagrantMode {
 		args = append(args, "--dangerously-skip-permissions")
 	} else if o.AllowSkipPermissions {
 		args = append(args, "--allow-dangerously-skip-permissions")

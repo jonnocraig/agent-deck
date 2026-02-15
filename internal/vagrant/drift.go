@@ -8,16 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-
-	"github.com/asheshgoplani/agent-deck/internal/session"
 )
-
-// Manager manages the Vagrant VM lifecycle and configuration for a project.
-// It handles config drift detection to notify users when VM needs re-provisioning.
-type Manager struct {
-	projectPath string
-	settings    session.VagrantSettings
-}
 
 // configHash computes a deterministic SHA-256 hash of the VM configuration inputs.
 // This hash is used to detect when the VM configuration has changed (config drift).
