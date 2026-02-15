@@ -2173,6 +2173,157 @@ func TestInstance_UpdateHookStatus(t *testing.T) {
 	}
 }
 
+// mockVagrantVM is a mock implementation of VagrantVM for testing multi-session logic.
+type mockVagrantVM struct {
+	status        string
+	statusErr     error
+	sessionCount  int
+	bootCalled    bool
+	dotfilePath   string
+	registerCalls []string
+}
+
+func (m *mockVagrantVM) PreflightCheck() error                { return nil }
+func (m *mockVagrantVM) EnsureVagrantfile() error             { return nil }
+func (m *mockVagrantVM) EnsureSudoSkill() error               { return nil }
+func (m *mockVagrantVM) Boot() error                          { m.bootCalled = true; return nil }
+func (m *mockVagrantVM) Suspend() error                       { return nil }
+func (m *mockVagrantVM) Resume() error                        { return nil }
+func (m *mockVagrantVM) Destroy() error                       { return nil }
+func (m *mockVagrantVM) ForceRestart() error                  { return nil }
+func (m *mockVagrantVM) Reload() error                        { return nil }
+func (m *mockVagrantVM) Provision() error                     { return nil }
+func (m *mockVagrantVM) Status() (string, error)              { return m.status, m.statusErr }
+func (m *mockVagrantVM) HealthCheck() (VMHealthResult, error) {
+	return VMHealthResult{State: m.status, Healthy: true, Responsive: true}, nil
+}
+func (m *mockVagrantVM) WrapCommand(cmd string, _ []string, _ []int) string { return "vagrant-ssh -- " + cmd }
+func (m *mockVagrantVM) SyncClaudeConfig() error                           { return nil }
+func (m *mockVagrantVM) WriteMCPJson(_ string, _ []string) error           { return nil }
+func (m *mockVagrantVM) CollectEnvVarNames(_ []string, _ map[string]string) []string { return nil }
+func (m *mockVagrantVM) CollectTunnelPorts(_ []string) []int               { return nil }
+func (m *mockVagrantVM) HasConfigDrift() bool                              { return false }
+func (m *mockVagrantVM) WriteConfigHash() error                            { return nil }
+func (m *mockVagrantVM) RegisterSession(id string)                         { m.registerCalls = append(m.registerCalls, id) }
+func (m *mockVagrantVM) UnregisterSession(_ string)                        {}
+func (m *mockVagrantVM) SessionCount() int                                 { return m.sessionCount }
+func (m *mockVagrantVM) IsLastSession(_ string) bool                       { return m.sessionCount <= 1 }
+func (m *mockVagrantVM) SetDotfilePath(id string)                          { m.dotfilePath = id }
+func (m *mockVagrantVM) IsInstalled() bool                                 { return true }
+func (m *mockVagrantVM) IsBoxCached() bool                                 { return true }
+
+// TestVagrantMultiSession_ShareSkipsBoot tests that sharing an existing VM skips Boot().
+func TestVagrantMultiSession_ShareSkipsBoot(t *testing.T) {
+	mock := &mockVagrantVM{status: "running", sessionCount: 1}
+	inst := NewInstance("test-share", "/tmp/test")
+	inst.vagrantProvider = mock
+
+	cmd, err := inst.applyVagrantWrapper("claude --resume")
+	if err != nil {
+		t.Fatalf("applyVagrantWrapper failed: %v", err)
+	}
+
+	// Share mode (default): should NOT call Boot() since VM is already running
+	if mock.bootCalled {
+		t.Error("Boot() should not be called when sharing an existing running VM")
+	}
+
+	// Should still register the session
+	if len(mock.registerCalls) != 1 || mock.registerCalls[0] != inst.ID {
+		t.Errorf("RegisterSession not called correctly: %v", mock.registerCalls)
+	}
+
+	// Command should be wrapped
+	if cmd == "" {
+		t.Error("wrapped command should not be empty")
+	}
+}
+
+// TestVagrantMultiSession_SeparateCallsBootWithDotfile tests that separate VM mode boots a new VM.
+func TestVagrantMultiSession_SeparateCallsBootWithDotfile(t *testing.T) {
+	mock := &mockVagrantVM{status: "running", sessionCount: 1}
+	inst := NewInstance("test-separate", "/tmp/test")
+	inst.vagrantProvider = mock
+	inst.VagrantSeparateVM = true
+
+	_, err := inst.applyVagrantWrapper("claude --resume")
+	if err != nil {
+		t.Fatalf("applyVagrantWrapper failed: %v", err)
+	}
+
+	// Separate mode: should call SetDotfilePath and Boot
+	if mock.dotfilePath != inst.ID {
+		t.Errorf("SetDotfilePath should be called with session ID, got %q", mock.dotfilePath)
+	}
+	if !mock.bootCalled {
+		t.Error("Boot() should be called for separate VM mode")
+	}
+}
+
+// TestVagrantMultiSession_NoExistingVM tests normal boot when no VM is running.
+func TestVagrantMultiSession_NoExistingVM(t *testing.T) {
+	mock := &mockVagrantVM{status: "not_created", sessionCount: 0}
+	inst := NewInstance("test-fresh", "/tmp/test")
+	inst.vagrantProvider = mock
+
+	_, err := inst.applyVagrantWrapper("claude --resume")
+	if err != nil {
+		t.Fatalf("applyVagrantWrapper failed: %v", err)
+	}
+
+	// Should call Boot() normally
+	if !mock.bootCalled {
+		t.Error("Boot() should be called when no VM exists")
+	}
+}
+
+// TestForkInheritsVagrantSeparateVM tests that forked sessions inherit the parent's VM sharing choice.
+func TestForkInheritsVagrantSeparateVM(t *testing.T) {
+	// Isolate from user's environment
+	origConfigDir := os.Getenv("CLAUDE_CONFIG_DIR")
+	origHome := os.Getenv("HOME")
+	os.Unsetenv("CLAUDE_CONFIG_DIR")
+	os.Setenv("HOME", t.TempDir())
+	ClearUserConfigCache()
+	defer func() {
+		if origConfigDir != "" {
+			os.Setenv("CLAUDE_CONFIG_DIR", origConfigDir)
+		}
+		os.Setenv("HOME", origHome)
+		ClearUserConfigCache()
+	}()
+
+	t.Run("separate VM inherited", func(t *testing.T) {
+		parent := NewInstance("parent", "/tmp/test")
+		parent.ClaudeSessionID = "abc-123"
+		parent.ClaudeDetectedAt = time.Now()
+		parent.VagrantSeparateVM = true
+
+		forked, _, err := parent.CreateForkedInstance("child", "")
+		if err != nil {
+			t.Fatalf("CreateForkedInstance failed: %v", err)
+		}
+		if !forked.VagrantSeparateVM {
+			t.Error("forked instance should inherit VagrantSeparateVM=true from parent")
+		}
+	})
+
+	t.Run("shared VM inherited (default)", func(t *testing.T) {
+		parent := NewInstance("parent", "/tmp/test")
+		parent.ClaudeSessionID = "def-456"
+		parent.ClaudeDetectedAt = time.Now()
+		parent.VagrantSeparateVM = false
+
+		forked, _, err := parent.CreateForkedInstance("child", "")
+		if err != nil {
+			t.Fatalf("CreateForkedInstance failed: %v", err)
+		}
+		if forked.VagrantSeparateVM {
+			t.Error("forked instance should inherit VagrantSeparateVM=false from parent")
+		}
+	})
+}
+
 // TestInstance_UpdateHookStatus_Nil tests UpdateHookStatus with nil input.
 func TestInstance_UpdateHookStatus_Nil(t *testing.T) {
 	inst := NewInstanceWithTool("hook-nil-test", "/tmp/test", "claude")

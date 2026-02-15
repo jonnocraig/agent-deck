@@ -2,72 +2,64 @@
 
 ## In Progress
 
-- [ ] Wave 3 quality gates (build passed, vet passed, tests interrupted -- need re-run)
-- [ ] Execute remaining waves with `agentic-ai-implement` skill
+- [ ] Execute Wave 5 (UI Integration) — 4 tasks, all parallel
 
-## Completed This Session (Session 7 -- Implementation Sessions 2+3)
+## Completed This Session (Session 8 — Wave 4 Implementation)
 
-### Wave 1 (Foundation) -- 4/4 complete
-- [x] task-1.1: VagrantSettings struct + config parsing (userconfig.go)
-- [x] task-1.2: VagrantProvider interface (provider.go)
-- [x] task-1.3: UseVagrantMode in ClaudeOptions (tooloptions.go)
-- [x] task-3.3: Loading tips -- 100 tips (tips.go)
+### Wave 3 Quality Gates — Re-run and Passed
+- [x] `go test ./internal/vagrant/` — PASS
+- [x] `go test ./internal/session/` — PASS
+- [x] `go build ./...` — PASS
 
-### Wave 2 (Core Infrastructure) -- 8/8 complete
-- [x] task-2.1: Manager struct + basic lifecycle (manager.go)
-- [x] task-2.2: Vagrantfile template generation (vagrantfile.go)
-- [x] task-2.3: Boot phase parser (bootphase.go)
-- [x] task-2.4: Preflight checks (preflight.go)
-- [x] task-2.5: Two-phase health check (health.go)
-- [x] task-2.6: Config drift detection (drift.go)
-- [x] task-2.7: Multi-session tracking (sessions.go)
-- [x] task-5.1: TUI vagrant checkbox (claudeoptions.go)
+### Wave 4: Instance Lifecycle — 5/5 complete
+- [x] task-4.1 (opus): Vagrant lifecycle hooks — applyVagrantWrapper, stopVagrant/destroyVagrant goroutines, waitForVagrantOp, IsVagrantMode(), import cycle resolution via bridge adapter pattern
+- [x] task-4.2 (sonnet): Restart flow — restartVagrantSession() with state machine for running/suspended/aborted/not_created
+- [x] task-4.3 (sonnet): Health check in UpdateStatus() — periodic VM health checks with configurable interval
+- [x] task-4.4 (haiku): Config drift in applyVagrantWrapper — re-provision on drift during Start
+- [x] task-4.5 (implemented in main session): Multi-session share/separate flow + fork inheritance + 4 new tests
 
-### Wave 3 (MCP & Skills) -- 4/4 complete
-- [x] task-3.1: MCP config for Vagrant (mcp.go)
-- [x] task-3.2: Sudo skill + credential guard (skill.go)
-- [x] task-3.4: Command wrapping SSH tunnels (wrap.go)
-- [x] task-3.5: SyncClaudeConfig (sync.go)
+### Import Cycle Resolution
+- [x] Created `internal/session/vagrant_iface.go` — VagrantVM interface + VMHealthResult + VagrantProviderFactory
+- [x] Created `internal/vagrant/bridge.go` — vagrantVMAdapter that bridges Manager → VagrantVM interface
+- [x] Removed direct `vagrant` import from `instance.go`
 
-### Quality Gates Passed
-- [x] Wave 1 quality gates (build, vet, tests)
-- [x] Wave 2 quality gates (build, vet, vagrant tests, session tests)
-- [ ] Wave 3 quality gates (build PASS, vet PASS, tests INTERRUPTED)
+### Wave 4 Quality Gates — PASSED
+- [x] `go build ./...` — PASS
+- [x] `go vet ./...` — PASS
+- [x] `go test ./internal/session/` — PASS
+- [x] `go test ./internal/vagrant/` — PASS
 
 ## Completed Previous Sessions
 
 - [x] Multi-perspective brainstorm (Architect, Implementer, Devil's Advocate, Security Analyst)
 - [x] Wrote design document: `docs/plans/2026-02-14-vagrant-mode-design.md`
-- [x] Multi-model design review with Gemini 3 Pro + GPT 5.1 Codex -- 22 issues amended
+- [x] Multi-model design review with Gemini 3 Pro + GPT 5.1 Codex — 22 issues amended
 - [x] Multi-model consensus review of plan with Gemini 3 Pro + GPT 5.2
-- [x] Created implementation plan using `agentic-ai-plan` skill -- 34 tasks, 6 waves
+- [x] Created implementation plan using `agentic-ai-plan` skill — 34 tasks, 6 waves
 - [x] Rebased feature/vagrant branch from feature/teammate-mode onto main (v0.16.0)
+- [x] Wave 1 (Foundation): 4/4 complete
+- [x] Wave 2 (Core Infrastructure): 8/8 complete
+- [x] Wave 3 (MCP & Skills): 4/4 complete
 
-## Pending -- Waves 4-6 (18 tasks remaining)
+## Pending — Waves 5-6 (14 tasks remaining)
 
-### Wave 4: Instance Lifecycle (5 tasks, partially serialized)
-- [ ] task-4.1: Start hook (instance.go) -- MUST run first
-- [ ] task-4.2: Health monitor goroutine (instance.go) -- parallel with 4.3, 4.4
-- [ ] task-4.3: Config drift on start (instance.go) -- parallel with 4.2, 4.4
-- [ ] task-4.4: Multi-session prompt (instance.go) -- parallel with 4.2, 4.3
-- [ ] task-4.5: Stop/restart hooks (instance.go) -- MUST run last
+### Wave 5: UI Integration (4 tasks, all parallel)
+- [ ] task-5.1 (sonnet): Vagrant mode checkbox in TUI — modify claudeoptions.go (NOTE: checkbox already added in Wave 2, may need verification/updates only)
+- [ ] task-5.2 (sonnet): Boot progress display in session list — modify sessionlist.go (doesn't exist yet, check list.go)
+- [ ] task-5.3 (sonnet): Stale VM cleanup dialog (Shift+D) — create cleanup_dialog.go, modify app.go (app.go doesn't exist, check home.go)
+- [ ] task-5.4 (haiku): Apple Silicon kext detection in TUI — modify instance.go
 
-### Wave 5: UI Integration (3 tasks)
-- [ ] task-5.2: Boot progress display in session list
-- [ ] task-5.3: Stale VM cleanup dialog (Shift+D)
-- [ ] task-5.4: Apple Silicon kext detection in TUI
-
-### Wave 6: Hardening & Polish (10 tasks)
-- [ ] task-6.1: Manager unit tests
-- [ ] task-6.2: MCP unit tests
-- [ ] task-6.3: Health check unit tests
-- [ ] task-6.4: Instance lifecycle unit tests
-- [ ] task-6.5: Credential guard unit tests
-- [ ] task-6.6: Drift detection unit tests
-- [ ] task-6.7: Tips unit tests
-- [ ] task-6.8: UI checkbox unit tests
-- [ ] task-6.9: MockVagrantProvider
-- [ ] task-6.10: Documentation (config-reference.md + README)
+### Wave 6: Testing & Hardening (10 tasks, all parallel)
+- [ ] task-6.1 (haiku): MockVagrantProvider + interface check
+- [ ] task-6.2 (sonnet): Manager unit tests
+- [ ] task-6.3 (haiku): MCP unit tests
+- [ ] task-6.4 (haiku): Health check unit tests
+- [ ] task-6.5 (sonnet): Instance lifecycle unit tests with mock
+- [ ] task-6.6 (haiku): Credential guard tests
+- [ ] task-6.7 (haiku): Config drift tests
+- [ ] task-6.8 (haiku): Tips tests
+- [ ] task-6.9 (sonnet): UI tests
+- [ ] task-6.10 (haiku): Documentation updates
 
 ## Blocked
 
@@ -75,4 +67,8 @@
 
 ## Known Issues
 
-- task-5.3 lists `cleanup_dialog.go` as "modify" but it doesn't exist -- should be "create"
+- task-5.1 may be partially done already (TUI checkbox added in Wave 2 as part of task-5.1 scheduled early)
+- task-5.3 lists `cleanup_dialog.go` as "modify" but it doesn't exist — should be "create"
+- task-5.3 references `app.go` which doesn't exist — the main TUI file is `home.go`
+- task-5.2 references `sessionlist.go` which doesn't exist — session list rendering is in `list.go`
+- Wave 6 tasks may find many tests already exist from earlier waves (each file got `_test.go` in Wave 2-3)

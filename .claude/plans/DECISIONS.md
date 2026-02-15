@@ -77,3 +77,9 @@
 **Context**: Multi-model consensus review (Gemini 3 Pro + GPT 5.2) identified that Wave 2 had 6 tasks all targeting `manager.go`, which would cause merge conflicts when parallel agents edit the same file.
 **Decision**: Split manager.go methods into 9 dedicated files: `vagrantfile.go`, `bootphase.go`, `preflight.go`, `health.go`, `drift.go`, `sessions.go`, `wrap.go`, `sync.go`. Each file contains a cohesive set of Manager methods. `manager.go` retains only struct definition, constructor, and core lifecycle (Up/Suspend/Destroy/Status).
 **Consequences**: All Wave 2 and Wave 3 tasks now target unique files. Zero file contention in parallel execution. Each file gets its own `_test.go`. Wave 4 still requires serialization (all touch `instance.go`).
+
+## 2026-02-15 - Import Cycle Resolution: Bridge Adapter Pattern
+
+**Context**: Wave 4 task-4.1 needed instance.go (in session package) to call vagrant.Manager methods. But vagrant package already imports session package for VagrantSettings type. Direct import creates `session → vagrant → session` cycle.
+**Decision**: Define `VagrantVM` interface in session package (vagrant_iface.go). Create `vagrantVMAdapter` in vagrant package (bridge.go) that wraps Manager and satisfies the interface. Register via `init()` function that sets `session.VagrantProviderFactory`. This breaks the import direction: session defines the interface, vagrant implements it and registers itself.
+**Consequences**: No import cycle. instance.go uses VagrantVM interface (never imports vagrant). vagrant/bridge.go imports session (one-way dependency). Go structural typing means Manager methods don't need explicit `implements` declaration. Factory pattern allows lazy initialization. Tests can mock VagrantVM directly in session package.
