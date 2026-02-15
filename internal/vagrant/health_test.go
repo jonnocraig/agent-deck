@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/asheshgoplani/agent-deck/internal/session"
 )
 
 func TestVMStateMessage(t *testing.T) {
@@ -219,6 +221,126 @@ func TestHealthCheckCacheNil(t *testing.T) {
 
 	if m.cache.ttl != 30*time.Second {
 		t.Errorf("Cache TTL = %v, want %v", m.cache.ttl, 30*time.Second)
+	}
+}
+
+func TestHealthCache_GetAndSet(t *testing.T) {
+	cache := &healthCache{
+		ttl: 30 * time.Second,
+	}
+
+	// Test get on empty cache
+	initialResult := cache.get()
+	if initialResult.State != "" {
+		t.Errorf("empty cache get() should return zero value, got State=%q", initialResult.State)
+	}
+
+	// Test set and get
+	testHealth := VMHealth{
+		State:      "running",
+		Healthy:    true,
+		Responsive: true,
+		Message:    "VM running and responsive",
+	}
+
+	cache.set(testHealth)
+
+	// Verify get returns the stored result
+	retrieved := cache.get()
+	if retrieved.State != testHealth.State {
+		t.Errorf("get() State = %q, want %q", retrieved.State, testHealth.State)
+	}
+	if retrieved.Healthy != testHealth.Healthy {
+		t.Errorf("get() Healthy = %v, want %v", retrieved.Healthy, testHealth.Healthy)
+	}
+	if retrieved.Responsive != testHealth.Responsive {
+		t.Errorf("get() Responsive = %v, want %v", retrieved.Responsive, testHealth.Responsive)
+	}
+	if retrieved.Message != testHealth.Message {
+		t.Errorf("get() Message = %q, want %q", retrieved.Message, testHealth.Message)
+	}
+
+	// Verify lastCheck was updated
+	if cache.lastCheck.IsZero() {
+		t.Error("set() should update lastCheck time")
+	}
+
+	// Test set updates lastCheck on subsequent calls
+	firstCheck := cache.lastCheck
+	time.Sleep(10 * time.Millisecond)
+
+	updatedHealth := VMHealth{
+		State:      "saved",
+		Healthy:    false,
+		Responsive: false,
+		Message:    "VM is suspended",
+	}
+	cache.set(updatedHealth)
+
+	if !cache.lastCheck.After(firstCheck) {
+		t.Error("set() should update lastCheck to a newer time")
+	}
+
+	// Verify updated values
+	retrieved = cache.get()
+	if retrieved.State != "saved" {
+		t.Errorf("get() after update should return new State, got %q", retrieved.State)
+	}
+}
+
+func TestInitCache_Idempotent(t *testing.T) {
+	// Import is already at top of file
+	mgr := NewManager("/test/path", session.VagrantSettings{})
+	mgr.cache = nil // Reset cache to test initialization
+
+	// First call should initialize cache
+	mgr.initCache()
+	if mgr.cache == nil {
+		t.Fatal("initCache() should create cache when nil")
+	}
+
+	firstCache := mgr.cache
+	firstCacheTTL := mgr.cache.ttl
+
+	// Verify default TTL
+	if firstCacheTTL != 30*time.Second {
+		t.Errorf("cache.ttl = %v, want 30s", firstCacheTTL)
+	}
+
+	// Second call should not reset cache
+	mgr.cache.lastCheck = time.Now()
+	originalLastCheck := mgr.cache.lastCheck
+	originalResult := VMHealth{State: "test"}
+	mgr.cache.result = originalResult
+
+	mgr.initCache()
+
+	// Should be the same cache instance
+	if mgr.cache != firstCache {
+		t.Error("initCache() should not replace existing cache")
+	}
+
+	// Cache contents should be preserved
+	if mgr.cache.result.State != "test" {
+		t.Error("initCache() should preserve cache contents")
+	}
+
+	if mgr.cache.lastCheck != originalLastCheck {
+		t.Error("initCache() should preserve lastCheck time")
+	}
+
+	// Third call with new data in cache
+	mgr.cache.set(VMHealth{State: "running", Healthy: true})
+	thirdCache := mgr.cache
+
+	mgr.initCache()
+
+	if mgr.cache != thirdCache {
+		t.Error("initCache() should remain idempotent across multiple calls")
+	}
+
+	if mgr.cache.result.State != "running" {
+		t.Error("initCache() should not modify cache data")
 	}
 }
 

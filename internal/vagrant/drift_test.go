@@ -395,3 +395,83 @@ func TestConfigHashPortForwardProtocol(t *testing.T) {
 		t.Errorf("different port forward protocols should produce different hashes, but both are %s", hash1)
 	}
 }
+
+// TestWriteConfigHashMkdirError tests WriteConfigHash when MkdirAll fails
+func TestWriteConfigHashMkdirError(t *testing.T) {
+	// Create a file where .vagrant directory should be (blocks MkdirAll)
+	tmpDir := t.TempDir()
+	blockingFile := filepath.Join(tmpDir, ".vagrant")
+	if err := os.WriteFile(blockingFile, []byte("blocker"), 0o644); err != nil {
+		t.Fatalf("failed to create blocking file: %v", err)
+	}
+
+	settings := session.VagrantSettings{
+		Box:               "bento/ubuntu-24.04",
+		ProvisionPackages: []string{},
+		NpmPackages:       []string{},
+	}
+
+	m := &Manager{
+		projectPath: tmpDir,
+		settings:    settings,
+	}
+
+	err := m.WriteConfigHash()
+	if err == nil {
+		t.Error("expected error when .vagrant is a file, got nil")
+	}
+}
+
+// TestWriteConfigHashReadonlyDir tests WriteConfigHash when directory is readonly
+func TestWriteConfigHashReadonlyDir(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	settings := session.VagrantSettings{
+		Box:               "bento/ubuntu-24.04",
+		ProvisionPackages: []string{},
+		NpmPackages:       []string{},
+	}
+
+	m := &Manager{
+		projectPath: tmpDir,
+		settings:    settings,
+	}
+
+	// Create .vagrant directory but make it readonly
+	vagrantDir := filepath.Join(tmpDir, ".vagrant")
+	if err := os.MkdirAll(vagrantDir, 0o755); err != nil {
+		t.Fatalf("failed to create .vagrant dir: %v", err)
+	}
+	if err := os.Chmod(vagrantDir, 0o444); err != nil {
+		t.Fatalf("failed to chmod .vagrant dir: %v", err)
+	}
+	defer os.Chmod(vagrantDir, 0o755) // restore for cleanup
+
+	err := m.WriteConfigHash()
+	if err == nil {
+		t.Error("expected error when .vagrant directory is readonly, got nil")
+	}
+}
+
+// TestConfigHashProvisionScriptMissing tests behavior when provision script file is missing
+func TestConfigHashProvisionScriptMissing(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	settings := session.VagrantSettings{
+		Box:               "bento/ubuntu-24.04",
+		ProvisionScript:   "/nonexistent/script.sh",
+		ProvisionPackages: []string{},
+		NpmPackages:       []string{},
+	}
+
+	m := &Manager{
+		projectPath: tmpDir,
+		settings:    settings,
+	}
+
+	// Should not panic or error - just continue without hashing script content
+	hash := m.configHash()
+	if hash == "" {
+		t.Error("expected hash to be computed even with missing provision script")
+	}
+}

@@ -227,3 +227,57 @@ func TestDiskSpaceCalculation(t *testing.T) {
 		})
 	}
 }
+
+// TestExtractVersion tests extracting clean version from VBoxManage output
+func TestExtractVersion(t *testing.T) {
+	tests := []struct {
+		name     string
+		raw      string
+		expected string
+	}{
+		{
+			name:     "version with build suffix",
+			raw:      "7.2.4r163906",
+			expected: "7.2.4",
+		},
+		{
+			name:     "clean version",
+			raw:      "7.0.0",
+			expected: "7.0.0",
+		},
+		{
+			name:     "version with alpha suffix",
+			raw:      "7.1.0alpha1",
+			expected: "7.1.0",
+		},
+		{
+			name:     "version with beta",
+			raw:      "6.1.50beta",
+			expected: "6.1.50",
+		},
+		{
+			name:     "empty string",
+			raw:      "",
+			expected: "",
+		},
+		{
+			name:     "no version chars",
+			raw:      "abc",
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := extractVersion(tt.raw)
+			require.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestParseVersionInvalidMinor tests parseVersion with invalid minor version
+func TestParseVersionInvalidMinor(t *testing.T) {
+	major, minor := parseVersion("7.invalid")
+	require.Equal(t, 7, major, "major should still parse")
+	require.Equal(t, 0, minor, "minor should be 0 for invalid")
+}

@@ -2175,25 +2175,51 @@ func TestInstance_UpdateHookStatus(t *testing.T) {
 
 // mockVagrantVM is a mock implementation of VagrantVM for testing multi-session logic.
 type mockVagrantVM struct {
-	status        string
-	statusErr     error
-	sessionCount  int
-	bootCalled    bool
-	dotfilePath   string
-	registerCalls []string
+	status           string
+	statusErr        error
+	sessionCount     int
+	bootCalled       bool
+	dotfilePath      string
+	registerCalls    []string
+	PreflightCheckFn func() error
+	BootFn           func() error
+	SuspendFn        func() error
+	DestroyFn        func() error
+	UnregisterFn     func(string)
 }
 
-func (m *mockVagrantVM) PreflightCheck() error                { return nil }
-func (m *mockVagrantVM) EnsureVagrantfile() error             { return nil }
-func (m *mockVagrantVM) EnsureSudoSkill() error               { return nil }
-func (m *mockVagrantVM) Boot() error                          { m.bootCalled = true; return nil }
-func (m *mockVagrantVM) Suspend() error                       { return nil }
-func (m *mockVagrantVM) Resume() error                        { return nil }
-func (m *mockVagrantVM) Destroy() error                       { return nil }
-func (m *mockVagrantVM) ForceRestart() error                  { return nil }
-func (m *mockVagrantVM) Reload() error                        { return nil }
-func (m *mockVagrantVM) Provision() error                     { return nil }
-func (m *mockVagrantVM) Status() (string, error)              { return m.status, m.statusErr }
+func (m *mockVagrantVM) PreflightCheck() error {
+	if m.PreflightCheckFn != nil {
+		return m.PreflightCheckFn()
+	}
+	return nil
+}
+func (m *mockVagrantVM) EnsureVagrantfile() error { return nil }
+func (m *mockVagrantVM) EnsureSudoSkill() error   { return nil }
+func (m *mockVagrantVM) Boot() error {
+	if m.BootFn != nil {
+		return m.BootFn()
+	}
+	m.bootCalled = true
+	return nil
+}
+func (m *mockVagrantVM) Suspend() error {
+	if m.SuspendFn != nil {
+		return m.SuspendFn()
+	}
+	return nil
+}
+func (m *mockVagrantVM) Resume() error       { return nil }
+func (m *mockVagrantVM) Destroy() error {
+	if m.DestroyFn != nil {
+		return m.DestroyFn()
+	}
+	return nil
+}
+func (m *mockVagrantVM) ForceRestart() error  { return nil }
+func (m *mockVagrantVM) Reload() error        { return nil }
+func (m *mockVagrantVM) Provision() error     { return nil }
+func (m *mockVagrantVM) Status() (string, error) { return m.status, m.statusErr }
 func (m *mockVagrantVM) HealthCheck() (VMHealthResult, error) {
 	return VMHealthResult{State: m.status, Healthy: true, Responsive: true}, nil
 }
@@ -2201,11 +2227,15 @@ func (m *mockVagrantVM) WrapCommand(cmd string, _ []string, _ []int) string { re
 func (m *mockVagrantVM) SyncClaudeConfig() error                           { return nil }
 func (m *mockVagrantVM) WriteMCPJson(_ string, _ []string) error           { return nil }
 func (m *mockVagrantVM) CollectEnvVarNames(_ []string, _ map[string]string) []string { return nil }
-func (m *mockVagrantVM) CollectTunnelPorts(_ []string) []int               { return nil }
-func (m *mockVagrantVM) HasConfigDrift() bool                              { return false }
-func (m *mockVagrantVM) WriteConfigHash() error                            { return nil }
-func (m *mockVagrantVM) RegisterSession(id string)                         { m.registerCalls = append(m.registerCalls, id) }
-func (m *mockVagrantVM) UnregisterSession(_ string)                        {}
+func (m *mockVagrantVM) CollectTunnelPorts(_ []string) []int                         { return nil }
+func (m *mockVagrantVM) HasConfigDrift() bool                                        { return false }
+func (m *mockVagrantVM) WriteConfigHash() error                                      { return nil }
+func (m *mockVagrantVM) RegisterSession(id string) { m.registerCalls = append(m.registerCalls, id) }
+func (m *mockVagrantVM) UnregisterSession(id string) {
+	if m.UnregisterFn != nil {
+		m.UnregisterFn(id)
+	}
+}
 func (m *mockVagrantVM) SessionCount() int                                 { return m.sessionCount }
 func (m *mockVagrantVM) IsLastSession(_ string) bool                       { return m.sessionCount <= 1 }
 func (m *mockVagrantVM) SetDotfilePath(id string)                          { m.dotfilePath = id }
@@ -2334,4 +2364,559 @@ func TestInstance_UpdateHookStatus_Nil(t *testing.T) {
 	if inst.hookStatus != "" {
 		t.Errorf("hookStatus should be empty, got %q", inst.hookStatus)
 	}
+}
+
+// TestMockProviderStartLifecycle verifies applyVagrantWrapper calls methods in order
+func TestMockProviderStartLifecycle(t *testing.T) {
+	callOrder := []string{}
+
+	mock := &mockVagrantVM{
+		status:       "not_created",
+		sessionCount: 0,
+	}
+
+	// Track Boot call order
+	mock.BootFn = func() error {
+		callOrder = append(callOrder, "Boot")
+		mock.bootCalled = true
+		return nil
+	}
+
+	inst := NewInstance("test-lifecycle", "/tmp/test")
+	inst.vagrantProvider = mock
+
+	_, err := inst.applyVagrantWrapper("claude --resume")
+	if err != nil {
+		t.Fatalf("applyVagrantWrapper failed: %v", err)
+	}
+
+	// Verify Boot was called
+	if !mock.bootCalled {
+		t.Error("Boot() should be called during applyVagrantWrapper")
+	}
+
+	// Verify session was registered
+	if len(mock.registerCalls) != 1 {
+		t.Errorf("expected 1 RegisterSession call, got %d", len(mock.registerCalls))
+	}
+}
+
+// TestStartWaitsForInFlightSuspend verifies waitForVagrantOp is called
+func TestStartWaitsForInFlightSuspend(t *testing.T) {
+	mock := &mockVagrantVM{
+		status:       "running",
+		sessionCount: 0,
+	}
+
+	inst := NewInstance("test-wait", "/tmp/test")
+	inst.vagrantProvider = mock
+
+	// Set vmOpInFlight to simulate in-flight operation
+	inst.vmOpInFlight.Store(true)
+	inst.vmOpDone = make(chan struct{})
+
+	// Start goroutine to signal completion after short delay
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		inst.vmOpInFlight.Store(false)
+		close(inst.vmOpDone)
+	}()
+
+	start := time.Now()
+	_, err := inst.applyVagrantWrapper("claude --resume")
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("applyVagrantWrapper failed: %v", err)
+	}
+
+	// Should have waited at least 50ms
+	if elapsed < 50*time.Millisecond {
+		t.Errorf("expected to wait for in-flight operation, elapsed: %v", elapsed)
+	}
+}
+
+// TestErrorMessageSetOnBootFailure verifies ErrorMessage field is set when Boot() fails
+func TestErrorMessageSetOnBootFailure(t *testing.T) {
+	mock := &mockVagrantVM{
+		status:       "not_created",
+		sessionCount: 0,
+	}
+
+	// Override Boot to return an error
+	mock.BootFn = func() error {
+		return fmt.Errorf("VirtualBox kernel module not loaded")
+	}
+
+	inst := NewInstance("test-boot-error", "/tmp/test")
+	inst.vagrantProvider = mock
+
+	_, err := inst.applyVagrantWrapper("claude --resume")
+	if err == nil {
+		t.Fatal("expected error from Boot failure, got nil")
+	}
+
+	// Verify ErrorMessage was set
+	if inst.ErrorMessage == "" {
+		t.Error("ErrorMessage should be set when Boot() fails")
+	}
+
+	// Verify Status is error
+	if inst.Status != StatusError {
+		t.Errorf("Status should be 'error', got %q", inst.Status)
+	}
+}
+
+// TestErrorMessageSetOnPreflightFailure verifies ErrorMessage is set on preflight failure
+func TestErrorMessageSetOnPreflightFailure(t *testing.T) {
+	mock := &mockVagrantVM{
+		status:       "not_created",
+		sessionCount: 0,
+	}
+
+	// Override PreflightCheck to return an error
+	mock.PreflightCheckFn = func() error {
+		return fmt.Errorf("VirtualBox not found. Install from https://www.virtualbox.org/wiki/Downloads")
+	}
+
+	inst := NewInstance("test-preflight-error", "/tmp/test")
+	inst.vagrantProvider = mock
+
+	_, err := inst.applyVagrantWrapper("claude --resume")
+	if err == nil {
+		t.Fatal("expected error from PreflightCheck failure, got nil")
+	}
+
+	// Verify ErrorMessage was set
+	if inst.ErrorMessage == "" {
+		t.Error("ErrorMessage should be set when PreflightCheck() fails")
+	}
+
+	// Verify Status is error
+	if inst.Status != StatusError {
+		t.Errorf("Status should be 'error', got %q", inst.Status)
+	}
+}
+
+// TestExtractErrorMessage tests the extractErrorMessage helper function.
+func TestExtractErrorMessage(t *testing.T) {
+	tests := []struct {
+		name    string
+		err     error
+		want    string
+	}{
+		{
+			name: "nil error",
+			err:  nil,
+			want: "",
+		},
+		{
+			name: "simple error",
+			err:  fmt.Errorf("simple error message"),
+			want: "simple error message",
+		},
+		{
+			name: "error with newline",
+			err:  fmt.Errorf("first line\nsecond line\nthird line"),
+			want: "first line",
+		},
+		{
+			name: "wrapped error",
+			err:  fmt.Errorf("outer: %w", fmt.Errorf("inner error\nwith details")),
+			want: "outer: inner error",
+		},
+		{
+			name: "multiline error from vagrant",
+			err:  fmt.Errorf("VirtualBox not found\nInstall from https://virtualbox.org\nVersion 7.0+ required"),
+			want: "VirtualBox not found",
+		},
+		{
+			name: "error with leading newline",
+			err:  fmt.Errorf("\nerror after newline"),
+			want: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractErrorMessage(tt.err)
+			if got != tt.want {
+				t.Errorf("extractErrorMessage() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestApplyVagrantWrapper_ErrorHandling tests error handling in applyVagrantWrapper.
+func TestApplyVagrantWrapper_ErrorHandling(t *testing.T) {
+	t.Run("preflight check failure sets ErrorMessage and StatusError", func(t *testing.T) {
+		mock := &mockVagrantVM{
+			status:       "not_created",
+			sessionCount: 0,
+		}
+
+		preflightErr := fmt.Errorf("disk space too low: 500MB available\nrequired: 10GB")
+		mock.PreflightCheckFn = func() error {
+			return preflightErr
+		}
+
+		inst := NewInstance("test-preflight", "/tmp/test")
+		inst.vagrantProvider = mock
+
+		_, err := inst.applyVagrantWrapper("claude")
+		if err == nil {
+			t.Fatal("expected error when PreflightCheck fails")
+		}
+
+		// ErrorMessage should contain first line only
+		expectedMsg := "disk space too low: 500MB available"
+		if inst.ErrorMessage != expectedMsg {
+			t.Errorf("ErrorMessage = %q, want %q", inst.ErrorMessage, expectedMsg)
+		}
+
+		// Status should be error
+		if inst.Status != StatusError {
+			t.Errorf("Status = %q, want %q", inst.Status, StatusError)
+		}
+	})
+
+	t.Run("boot failure sets ErrorMessage and StatusError", func(t *testing.T) {
+		mock := &mockVagrantVM{
+			status:       "not_created",
+			sessionCount: 0,
+		}
+
+		bootErr := fmt.Errorf("failed to start VM\nVirtualBox error: VERR_VMX_NO_VMX")
+		mock.BootFn = func() error {
+			return bootErr
+		}
+
+		inst := NewInstance("test-boot", "/tmp/test")
+		inst.vagrantProvider = mock
+
+		_, err := inst.applyVagrantWrapper("claude")
+		if err == nil {
+			t.Fatal("expected error when Boot fails")
+		}
+
+		// ErrorMessage should be set to first line
+		expectedMsg := "failed to start VM"
+		if inst.ErrorMessage != expectedMsg {
+			t.Errorf("ErrorMessage = %q, want %q", inst.ErrorMessage, expectedMsg)
+		}
+
+		if inst.Status != StatusError {
+			t.Errorf("Status = %q, want %q", inst.Status, StatusError)
+		}
+	})
+}
+
+// TestStopVagrant_AsyncBehavior tests the async goroutine behavior of stopVagrant.
+func TestStopVagrant_AsyncBehavior(t *testing.T) {
+	t.Run("suspends VM when AutoSuspend enabled and last session", func(t *testing.T) {
+		suspendCalled := false
+		mock := &mockVagrantVM{
+			status:       "running",
+			sessionCount: 1, // This is the last session
+		}
+
+		// Track Suspend call
+		mock.SuspendFn = func() error {
+			suspendCalled = true
+			return nil
+		}
+
+		inst := NewInstance("test-stop-suspend", "/tmp/test")
+		inst.vagrantProvider = mock
+
+		// Enable AutoSuspend
+		autoSuspend := true
+		userConfigCacheMu.Lock()
+		userConfigCache = &UserConfig{
+			Vagrant: VagrantSettings{
+				AutoSuspend: &autoSuspend,
+			},
+		}
+		userConfigCacheMu.Unlock()
+		defer func() {
+			userConfigCacheMu.Lock()
+			userConfigCache = nil
+			userConfigCacheMu.Unlock()
+		}()
+
+		// Call stopVagrant (async)
+		inst.stopVagrant()
+
+		// Wait for goroutine to complete
+		select {
+		case <-inst.vmOpDone:
+			// Success
+		case <-time.After(1 * time.Second):
+			t.Fatal("stopVagrant goroutine did not complete")
+		}
+
+		if !suspendCalled {
+			t.Error("Suspend should be called when AutoSuspend enabled and last session")
+		}
+
+		if inst.cleanShutdown != true {
+			t.Error("cleanShutdown should be true after successful suspend")
+		}
+
+		if inst.vmOpInFlight.Load() {
+			t.Error("vmOpInFlight should be false after goroutine completes")
+		}
+	})
+
+	t.Run("does not suspend when not last session", func(t *testing.T) {
+		suspendCalled := false
+		unregisterCalled := false
+
+		mock := &mockVagrantVM{
+			status:       "running",
+			sessionCount: 2, // Not last session
+		}
+
+		mock.SuspendFn = func() error {
+			suspendCalled = true
+			return nil
+		}
+
+		mock.UnregisterFn = func(id string) {
+			unregisterCalled = true
+		}
+
+		inst := NewInstance("test-stop-shared", "/tmp/test")
+		inst.vagrantProvider = mock
+
+		autoSuspend := true
+		userConfigCacheMu.Lock()
+		userConfigCache = &UserConfig{
+			Vagrant: VagrantSettings{
+				AutoSuspend: &autoSuspend,
+			},
+		}
+		userConfigCacheMu.Unlock()
+		defer func() {
+			userConfigCacheMu.Lock()
+			userConfigCache = nil
+			userConfigCacheMu.Unlock()
+		}()
+
+		inst.stopVagrant()
+
+		select {
+		case <-inst.vmOpDone:
+			// Success
+		case <-time.After(1 * time.Second):
+			t.Fatal("stopVagrant goroutine did not complete")
+		}
+
+		if suspendCalled {
+			t.Error("Suspend should NOT be called when not last session")
+		}
+
+		if !unregisterCalled {
+			t.Error("UnregisterSession should be called")
+		}
+	})
+
+	t.Run("does nothing when AutoSuspend disabled", func(t *testing.T) {
+		suspendCalled := false
+		mock := &mockVagrantVM{
+			status:       "running",
+			sessionCount: 1,
+		}
+
+		mock.SuspendFn = func() error {
+			suspendCalled = true
+			return nil
+		}
+
+		inst := NewInstance("test-stop-nosuspend", "/tmp/test")
+		inst.vagrantProvider = mock
+
+		// Disable AutoSuspend
+		autoSuspend := false
+		userConfigCacheMu.Lock()
+		userConfigCache = &UserConfig{
+			Vagrant: VagrantSettings{
+				AutoSuspend: &autoSuspend,
+			},
+		}
+		userConfigCacheMu.Unlock()
+		defer func() {
+			userConfigCacheMu.Lock()
+			userConfigCache = nil
+			userConfigCacheMu.Unlock()
+		}()
+
+		inst.stopVagrant()
+
+		select {
+		case <-inst.vmOpDone:
+			// Success
+		case <-time.After(1 * time.Second):
+			t.Fatal("stopVagrant goroutine did not complete")
+		}
+
+		if suspendCalled {
+			t.Error("Suspend should NOT be called when AutoSuspend disabled")
+		}
+	})
+}
+
+// TestDestroyVagrant_AsyncBehavior tests the async goroutine behavior of destroyVagrant.
+func TestDestroyVagrant_AsyncBehavior(t *testing.T) {
+	t.Run("destroys VM when AutoDestroy enabled and last session", func(t *testing.T) {
+		destroyCalled := false
+		mock := &mockVagrantVM{
+			status:       "running",
+			sessionCount: 1,
+		}
+
+		mock.DestroyFn = func() error {
+			destroyCalled = true
+			return nil
+		}
+
+		inst := NewInstance("test-destroy-auto", "/tmp/test")
+		inst.vagrantProvider = mock
+
+		// Enable AutoDestroy
+		userConfigCacheMu.Lock()
+		userConfigCache = &UserConfig{
+			Vagrant: VagrantSettings{
+				AutoDestroy: true,
+			},
+		}
+		userConfigCacheMu.Unlock()
+		defer func() {
+			userConfigCacheMu.Lock()
+			userConfigCache = nil
+			userConfigCacheMu.Unlock()
+		}()
+
+		inst.destroyVagrant()
+
+		select {
+		case <-inst.vmOpDone:
+			// Success
+		case <-time.After(1 * time.Second):
+			t.Fatal("destroyVagrant goroutine did not complete")
+		}
+
+		if !destroyCalled {
+			t.Error("Destroy should be called when AutoDestroy enabled and last session")
+		}
+
+		if inst.vmOpInFlight.Load() {
+			t.Error("vmOpInFlight should be false after goroutine completes")
+		}
+	})
+
+	t.Run("does not destroy when not last session", func(t *testing.T) {
+		destroyCalled := false
+		unregisterCalled := false
+
+		mock := &mockVagrantVM{
+			status:       "running",
+			sessionCount: 2, // Not last session
+		}
+
+		mock.DestroyFn = func() error {
+			destroyCalled = true
+			return nil
+		}
+
+		mock.UnregisterFn = func(id string) {
+			unregisterCalled = true
+		}
+
+		inst := NewInstance("test-destroy-shared", "/tmp/test")
+		inst.vagrantProvider = mock
+
+		userConfigCacheMu.Lock()
+		userConfigCache = &UserConfig{
+			Vagrant: VagrantSettings{
+				AutoDestroy: true,
+			},
+		}
+		userConfigCacheMu.Unlock()
+		defer func() {
+			userConfigCacheMu.Lock()
+			userConfigCache = nil
+			userConfigCacheMu.Unlock()
+		}()
+
+		inst.destroyVagrant()
+
+		select {
+		case <-inst.vmOpDone:
+			// Success
+		case <-time.After(1 * time.Second):
+			t.Fatal("destroyVagrant goroutine did not complete")
+		}
+
+		if destroyCalled {
+			t.Error("Destroy should NOT be called when not last session")
+		}
+
+		if !unregisterCalled {
+			t.Error("UnregisterSession should be called")
+		}
+	})
+
+	t.Run("only unregisters when AutoDestroy disabled", func(t *testing.T) {
+		destroyCalled := false
+		unregisterCalled := false
+
+		mock := &mockVagrantVM{
+			status:       "running",
+			sessionCount: 1,
+		}
+
+		mock.DestroyFn = func() error {
+			destroyCalled = true
+			return nil
+		}
+
+		mock.UnregisterFn = func(id string) {
+			unregisterCalled = true
+		}
+
+		inst := NewInstance("test-destroy-disabled", "/tmp/test")
+		inst.vagrantProvider = mock
+
+		// Disable AutoDestroy
+		userConfigCacheMu.Lock()
+		userConfigCache = &UserConfig{
+			Vagrant: VagrantSettings{
+				AutoDestroy: false,
+			},
+		}
+		userConfigCacheMu.Unlock()
+		defer func() {
+			userConfigCacheMu.Lock()
+			userConfigCache = nil
+			userConfigCacheMu.Unlock()
+		}()
+
+		inst.destroyVagrant()
+
+		select {
+		case <-inst.vmOpDone:
+			// Success
+		case <-time.After(1 * time.Second):
+			t.Fatal("destroyVagrant goroutine did not complete")
+		}
+
+		if destroyCalled {
+			t.Error("Destroy should NOT be called when AutoDestroy disabled")
+		}
+
+		if !unregisterCalled {
+			t.Error("UnregisterSession should still be called")
+		}
+	})
 }
