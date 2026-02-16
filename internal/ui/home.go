@@ -151,6 +151,7 @@ type Home struct {
 	geminiModelDialog    *GeminiModelDialog    // For selecting Gemini model
 	sessionPickerDialog  *SessionPickerDialog  // For sending output to another session
 	worktreeFinishDialog *WorktreeFinishDialog // For finishing worktree sessions (merge + cleanup)
+	cleanupDialog        *CleanupDialog        // For cleaning up stale suspended VMs
 
 	// Analytics cache (async fetching with TTL)
 	currentAnalytics       *session.SessionAnalytics                  // Current analytics for selected session (Claude)
@@ -213,6 +214,10 @@ type Home struct {
 
 	// Memory management: periodic cache pruning
 	lastCachePrune time.Time
+
+	// Hook-based status detection (Claude Code lifecycle hooks)
+	hookWatcher        *session.StatusFileWatcher
+	pendingHooksPrompt bool // True if user should be prompted to install hooks
 
 	// File watcher for external changes (auto-reload)
 	storageWatcher *StorageWatcher
@@ -449,6 +454,16 @@ type worktreeFinishResultMsg struct {
 	err          error
 }
 
+type staleVMsLoadedMsg struct {
+	vms []StaleVM
+	err error
+}
+
+type vmCleanupResultMsg struct {
+	destroyed []StaleVM
+	errors    []error
+}
+
 // statusUpdateRequest is sent to the background worker with current viewport info
 type statusUpdateRequest struct {
 	viewOffset    int      // Current scroll position
@@ -513,6 +528,7 @@ func NewHomeWithProfileAndMode(profile string) *Home {
 		geminiModelDialog:    NewGeminiModelDialog(),
 		sessionPickerDialog:  NewSessionPickerDialog(),
 		worktreeFinishDialog: NewWorktreeFinishDialog(),
+		cleanupDialog:        NewCleanupDialog(),
 		cursor:               0,
 		initialLoading:       true, // Show splash until sessions load
 		ctx:                  ctx,
@@ -642,6 +658,52 @@ func NewHomeWithProfileAndMode(profile string) *Home {
 		} else if watcher != nil {
 			h.storageWatcher = watcher
 			watcher.Start()
+		}
+	}
+
+	// Hook-based status detection (Claude Code lifecycle hooks)
+	userConfig, _ := session.LoadUserConfig()
+	hooksEnabled := userConfig == nil || userConfig.Claude.GetHooksEnabled()
+	if hooksEnabled {
+		configDir := session.GetClaudeConfigDir()
+		alreadyInstalled := session.CheckClaudeHooksInstalled(configDir)
+
+		if alreadyInstalled {
+			// Hooks already present: start watcher, no prompt needed
+			hookWatcher, err := session.NewStatusFileWatcher(nil)
+			if err != nil {
+				uiLog.Warn("hook_watcher_init_failed", slog.String("error", err.Error()))
+			} else {
+				h.hookWatcher = hookWatcher
+				go hookWatcher.Start()
+			}
+		} else {
+			// Hooks not installed: check if user was already prompted
+			prompted := false
+			if db := statedb.GetGlobal(); db != nil {
+				if val, err := db.GetMeta("hooks_prompted"); err == nil && val != "" {
+					prompted = true
+					if val == "accepted" {
+						// User previously accepted but hooks got removed: re-install silently
+						if _, err := session.InjectClaudeHooks(configDir); err != nil {
+							uiLog.Warn("hook_reinstall_failed", slog.String("error", err.Error()))
+						} else {
+							uiLog.Info("claude_hooks_reinstalled", slog.String("config_dir", configDir))
+						}
+						hookWatcher, err := session.NewStatusFileWatcher(nil)
+						if err != nil {
+							uiLog.Warn("hook_watcher_init_failed", slog.String("error", err.Error()))
+						} else {
+							h.hookWatcher = hookWatcher
+							go hookWatcher.Start()
+						}
+					}
+					// val == "declined": user doesn't want hooks, skip
+				}
+			}
+			if !prompted {
+				h.pendingHooksPrompt = true
+			}
 		}
 	}
 
@@ -1612,6 +1674,17 @@ func (h *Home) backgroundStatusUpdate() {
 		}
 	}
 
+	// Feed hook statuses from watcher to instances (enables hook fast path in UpdateStatus)
+	if h.hookWatcher != nil {
+		for _, inst := range instances {
+			if inst.Tool == "claude" {
+				if hs := h.hookWatcher.GetHookStatus(inst.ID); hs != nil {
+					inst.UpdateHookStatus(hs)
+				}
+			}
+		}
+	}
+
 	// Update status for all instances in parallel (I/O bound: tmux subprocess calls)
 	// With PipeManager, skip sessions idle for >5s (no %output events = no status change)
 	statusStart := time.Now()
@@ -2020,6 +2093,12 @@ func (h *Home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		h.reloadMu.Unlock()
 		h.initialLoading = false // First load complete, hide splash
+
+		// Show hooks installation prompt (after splash screen is gone)
+		if h.pendingHooksPrompt && !h.setupWizard.IsVisible() {
+			h.confirmDialog.ShowInstallHooks()
+			h.confirmDialog.SetSize(h.width, h.height)
+		}
 
 		if msg.err != nil {
 			h.setError(msg.err)
@@ -2877,6 +2956,27 @@ func (h *Home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			successMsg += fmt.Sprintf(", merged into %s", msg.targetBranch)
 		}
 		h.setError(fmt.Errorf("%s", successMsg))
+		return h, nil
+
+	case staleVMsLoadedMsg:
+		if msg.err != nil {
+			h.setError(msg.err)
+			return h, nil
+		}
+		h.cleanupDialog.SetVMs(msg.vms)
+		h.cleanupDialog.Show()
+		return h, nil
+
+	case vmCleanupResultMsg:
+		h.cleanupDialog.Hide()
+		if len(msg.errors) > 0 {
+			// Show first error
+			h.setError(msg.errors[0])
+		} else {
+			// Show success message
+			count := len(msg.destroyed)
+			h.setError(fmt.Errorf("Destroyed %d VM(s)", count))
+		}
 		return h, nil
 
 	case copyResultMsg:
@@ -3886,6 +3986,11 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Quick create: auto-generated name, smart defaults from group context
 		return h, h.quickCreateSession()
 
+	case "D":
+		// Stale VM cleanup dialog (Shift+D)
+		h.cleanupDialog.SetSize(h.width, h.height)
+		return h, h.loadStaleVMs()
+
 	case "d":
 		// Show confirmation dialog before deletion (prevents accidental deletion)
 		if h.cursor < len(h.flatItems) {
@@ -3902,13 +4007,19 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return h, h.importSessions
 
 	case "u":
-		// Mark session as unread (change idle → waiting)
+		// Mark session as unread (idle → waiting)
 		if h.cursor < len(h.flatItems) {
 			item := h.flatItems[h.cursor]
 			if item.Type == session.ItemTypeSession && item.Session != nil {
 				tmuxSess := item.Session.GetTmuxSession()
 				if tmuxSess != nil {
 					tmuxSess.ResetAcknowledged()
+					// Persist to SQLite so background sync doesn't overwrite
+					if db := statedb.GetGlobal(); db != nil {
+						_ = db.SetAcknowledged(item.Session.ID, false)
+					}
+					// Clear idle optimization so UpdateStatus does a full check
+					item.Session.ForceNextStatusCheck()
 					_ = item.Session.UpdateStatus()
 					h.saveInstances()
 				}
@@ -4126,6 +4237,41 @@ func (h *Home) handleConfirmDialogKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return h, nil
 
+	case ConfirmInstallHooks:
+		switch msg.String() {
+		case "y", "Y":
+			h.confirmDialog.Hide()
+			h.pendingHooksPrompt = false
+			configDir := session.GetClaudeConfigDir()
+			if _, err := session.InjectClaudeHooks(configDir); err != nil {
+				uiLog.Warn("hook_install_failed", slog.String("error", err.Error()))
+			} else {
+				uiLog.Info("claude_hooks_installed", slog.String("config_dir", configDir))
+			}
+			// Start the status file watcher
+			hookWatcher, err := session.NewStatusFileWatcher(nil)
+			if err != nil {
+				uiLog.Warn("hook_watcher_init_failed", slog.String("error", err.Error()))
+			} else {
+				h.hookWatcher = hookWatcher
+				go hookWatcher.Start()
+			}
+			// Remember user's choice
+			if db := statedb.GetGlobal(); db != nil {
+				_ = db.SetMeta("hooks_prompted", "accepted")
+			}
+			return h, nil
+		case "n", "N", "esc":
+			h.confirmDialog.Hide()
+			h.pendingHooksPrompt = false
+			// Remember user declined
+			if db := statedb.GetGlobal(); db != nil {
+				_ = db.SetMeta("hooks_prompted", "declined")
+			}
+			return h, nil
+		}
+		return h, nil
+
 	default:
 		// Handle delete confirmations (session/group)
 		switch msg.String() {
@@ -4215,6 +4361,10 @@ func (h *Home) performFinalShutdown(shutdownPool bool) tea.Cmd {
 		if pm := tmux.GetPipeManager(); pm != nil {
 			pm.Close()
 			tmux.SetPipeManager(nil)
+		}
+		// Close hook watcher (Claude Code lifecycle hooks)
+		if h.hookWatcher != nil {
+			h.hookWatcher.Stop()
 		}
 		// Close storage watcher
 		if h.storageWatcher != nil {
@@ -5285,6 +5435,8 @@ func (h *Home) updateSizes() {
 	h.confirmDialog.SetSize(h.width, h.height)
 	h.geminiModelDialog.SetSize(h.width, h.height)
 	h.worktreeFinishDialog.SetSize(h.width, h.height)
+	h.cleanupDialog.SetSize(h.width, h.height)
+	h.cleanupDialog.SetSize(h.width, h.height)
 }
 
 // View renders the UI
@@ -8431,4 +8583,68 @@ func getSessionContent(inst *session.Instance) (string, error) {
 	}
 
 	return content, nil
+}
+
+// loadStaleVMs loads stale suspended VMs in the background.
+func (h *Home) loadStaleVMs() tea.Cmd {
+	return func() tea.Msg {
+		vms, err := ListSuspendedAgentDeckVMs()
+		return staleVMsLoadedMsg{
+			vms: vms,
+			err: err,
+		}
+	}
+}
+
+// handleCleanupDialogKey processes key events for the cleanup dialog.
+func (h *Home) handleCleanupDialogKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "enter":
+		// Get selected VMs and start destruction
+		selectedVMs := h.cleanupDialog.GetSelectedVMs()
+		if len(selectedVMs) == 0 {
+			h.cleanupDialog.SetError("No VMs selected")
+			return h, nil
+		}
+
+		h.cleanupDialog.SetDestroying(true)
+		h.cleanupDialog.SetDestroyProgress("Destroying VMs...")
+
+		return h, h.destroyVMs(selectedVMs)
+
+	case "esc":
+		h.cleanupDialog.Hide()
+		return h, nil
+
+	default:
+		// Forward to dialog
+		d, cmd := h.cleanupDialog.Update(msg)
+		h.cleanupDialog = d
+		return h, cmd
+	}
+}
+
+// destroyVMs destroys the selected VMs asynchronously.
+func (h *Home) destroyVMs(vms []StaleVM) tea.Cmd {
+	return func() tea.Msg {
+		errors := DestroySuspendedVMs(vms)
+		destroyed := []StaleVM{}
+
+		// Track which VMs were successfully destroyed
+		if len(errors) == 0 {
+			destroyed = vms
+		} else {
+			// Some succeeded, some failed - calculate which succeeded
+			for i := range vms {
+				if i >= len(errors) || errors[i] == nil {
+					destroyed = append(destroyed, vms[i])
+				}
+			}
+		}
+
+		return vmCleanupResultMsg{
+			destroyed: destroyed,
+			errors:    errors,
+		}
+	}
 }

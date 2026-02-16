@@ -223,6 +223,7 @@ var (
 var (
 	SessionItemStyle         lipgloss.Style
 	SessionItemSelectedStyle lipgloss.Style
+	ErrorMessageStyle        lipgloss.Style
 )
 
 // Session List Rendering Styles (PERFORMANCE: cached at package level)
@@ -479,6 +480,10 @@ func initStyles() {
 		Background(ColorAccent).
 		Bold(true).
 		PaddingLeft(0)
+
+	ErrorMessageStyle = lipgloss.NewStyle().
+		Foreground(ColorRed).
+		Italic(true)
 
 	// Tree connector styles
 	TreeConnectorStyle = lipgloss.NewStyle().Foreground(ColorText)

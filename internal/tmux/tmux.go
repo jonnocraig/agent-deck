@@ -2244,6 +2244,18 @@ func (s *Session) ApplySharedAcknowledged(ack bool) {
 	}
 }
 
+// IsAcknowledged returns whether the session has been acknowledged by the user.
+// Used by the hook fast path to distinguish waiting (orange) from idle (gray).
+func (s *Session) IsAcknowledged() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.stateTracker == nil {
+		return false
+	}
+	return s.stateTracker.acknowledged
+}
+
 // GetLastActivityTime returns when the session content last changed
 // Returns zero time if no activity has been tracked
 func (s *Session) GetLastActivityTime() time.Time {
@@ -2731,7 +2743,8 @@ func (s *Session) SendEnter() error {
 // marker and gets swallowed by async TUI frameworks (Ink/Node.js, curses).
 func (s *Session) SendKeysAndEnter(keys string) error {
 	s.invalidateCache()
-	if err := s.SendKeys(keys); err != nil {
+	// Use chunked sending for large messages to avoid tmux buffer limits
+	if err := s.SendKeysChunked(keys); err != nil {
 		return err
 	}
 	// Delay for TUI apps (Ink, curses) to finish processing bracketed paste

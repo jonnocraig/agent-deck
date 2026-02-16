@@ -94,6 +94,9 @@ type UserConfig struct {
 
 	// Tmux defines tmux option overrides applied to every session
 	Tmux TmuxSettings `toml:"tmux"`
+
+	// Vagrant defines Vagrant VM settings for vagrant mode
+	Vagrant VagrantSettings `toml:"vagrant"`
 }
 
 // MCPPoolSettings defines HTTP MCP pool configuration
@@ -402,6 +405,12 @@ type ClaudeSettings struct {
 	// Sourced AFTER global [shell].env_files
 	// Path can be absolute, ~ for home, or relative to session working directory
 	EnvFile string `toml:"env_file"`
+
+	// HooksEnabled enables Claude Code hooks for real-time status detection.
+	// When enabled, agent-deck uses lifecycle hooks (SessionStart, Stop, etc.)
+	// for instant, deterministic status updates instead of polling tmux content.
+	// Default: true (nil = use default true, set false to disable)
+	HooksEnabled *bool `toml:"hooks_enabled"`
 }
 
 // GetDangerousMode returns whether dangerous mode is enabled, defaulting to true
@@ -411,6 +420,14 @@ func (c *ClaudeSettings) GetDangerousMode() bool {
 		return true
 	}
 	return *c.DangerousMode
+}
+
+// GetHooksEnabled returns whether Claude Code hooks are enabled, defaulting to true
+func (c *ClaudeSettings) GetHooksEnabled() bool {
+	if c.HooksEnabled == nil {
+		return true
+	}
+	return *c.HooksEnabled
 }
 
 // GeminiSettings defines Gemini CLI configuration
@@ -677,6 +694,33 @@ func (t TmuxSettings) GetInjectStatusLine() bool {
 type StatusSettings struct {
 	// Reserved for future status detection settings.
 	// Control mode pipes are always enabled (no longer configurable).
+}
+
+// VagrantSettings defines Vagrant VM configuration for vagrant mode
+type VagrantSettings struct {
+	MemoryMB            int               `toml:"memory_mb"`              // Default: 4096
+	CPUs                int               `toml:"cpus"`                   // Default: 2
+	Box                 string            `toml:"box"`                    // Default: "bento/ubuntu-24.04"
+	AutoSuspend         *bool             `toml:"auto_suspend"`           // Default: true
+	AutoDestroy         bool              `toml:"auto_destroy"`           // Default: false
+	HostGatewayIP       string            `toml:"host_gateway_ip"`        // Default: "10.0.2.2"
+	SyncedFolderType    string            `toml:"synced_folder_type"`     // Default: "virtualbox"
+	ProvisionPackages   []string          `toml:"provision_packages"`     // Additional packages (appended to base set)
+	ProvisionPkgExclude []string          `toml:"provision_packages_exclude"` // Packages to remove from base set
+	NpmPackages         []string          `toml:"npm_packages"`           // Additional global npm packages
+	ProvisionScript     string            `toml:"provision_script"`       // Path to custom shell script
+	Vagrantfile         string            `toml:"vagrantfile"`            // Path to custom Vagrantfile (disables generation)
+	HealthCheckInterval int               `toml:"health_check_interval"`  // Default: 30 (seconds)
+	PortForwards        []PortForward     `toml:"port_forwards"`          // Port forwarding rules
+	Env                 map[string]string `toml:"env"`                    // Additional env vars for VM sessions
+	ForwardProxyEnv     *bool             `toml:"forward_proxy_env"`      // Default: true — auto-forward host proxy vars
+}
+
+// PortForward defines a port forwarding rule
+type PortForward struct {
+	Guest    int    `toml:"guest"`    // Port inside VM
+	Host     int    `toml:"host"`     // Port on host
+	Protocol string `toml:"protocol"` // Default: "tcp"
 }
 
 // MaintenanceSettings controls the automatic maintenance worker
@@ -1203,6 +1247,61 @@ func GetInstanceSettings() InstanceSettings {
 		return InstanceSettings{} // Defaults applied via GetAllowMultiple()
 	}
 	return config.Instances
+}
+
+// GetVagrantSettings returns vagrant settings with defaults applied
+func GetVagrantSettings() VagrantSettings {
+	config, err := LoadUserConfig()
+	if err != nil || config == nil {
+		// Return defaults when no config exists
+		autoSuspend := true
+		forwardProxyEnv := true
+		return VagrantSettings{
+			MemoryMB:            4096,
+			CPUs:                2,
+			Box:                 "bento/ubuntu-24.04",
+			AutoSuspend:         &autoSuspend,
+			AutoDestroy:         false,
+			HostGatewayIP:       "10.0.2.2",
+			SyncedFolderType:    "virtualbox",
+			HealthCheckInterval: 30,
+			ForwardProxyEnv:     &forwardProxyEnv,
+		}
+	}
+
+	settings := config.Vagrant
+
+	// Apply defaults for unset values
+	if settings.MemoryMB <= 0 {
+		settings.MemoryMB = 4096
+	}
+	if settings.CPUs <= 0 {
+		settings.CPUs = 2
+	}
+	if settings.Box == "" {
+		settings.Box = "bento/ubuntu-24.04"
+	}
+	// AutoSuspend defaults to true (use pointer to distinguish from explicitly set false)
+	if settings.AutoSuspend == nil {
+		autoSuspend := true
+		settings.AutoSuspend = &autoSuspend
+	}
+	if settings.HostGatewayIP == "" {
+		settings.HostGatewayIP = "10.0.2.2"
+	}
+	if settings.SyncedFolderType == "" {
+		settings.SyncedFolderType = "virtualbox"
+	}
+	if settings.HealthCheckInterval <= 0 {
+		settings.HealthCheckInterval = 30
+	}
+	// ForwardProxyEnv defaults to true (use pointer to distinguish from explicitly set false)
+	if settings.ForwardProxyEnv == nil {
+		forwardProxyEnv := true
+		settings.ForwardProxyEnv = &forwardProxyEnv
+	}
+
+	return settings
 }
 
 // getMCPPoolConfigSection returns the MCP pool config section based on platform

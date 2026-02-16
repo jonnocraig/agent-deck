@@ -48,3 +48,6 @@ Thumbs.db
 
 .worktrees
 agent-deck-test
+/agentic-deck
+excalidraw.log
+.claude/settings.local.json

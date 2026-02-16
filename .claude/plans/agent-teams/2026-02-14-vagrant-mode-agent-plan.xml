@@ -1,0 +1,367 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<agentPlan>
+  <meta>
+    <title>Vagrant Mode (Just Do It) — Agent Team Plan</title>
+    <created>2026-02-15</created>
+    <sourcePlan>docs/plans/2026-02-14-vagrant-mode-design.md</sourcePlan>
+    <goal>Add 'Just do it (vagrant sudo)' checkbox to agent-deck that auto-manages a Vagrant VM lifecycle and runs Claude Code inside it with --dangerously-skip-permissions and sudo access</goal>
+    <architecture>Wrapper Command approach — checkbox in TUI, VagrantManager handles VM lifecycle, commands wrapped via 'vagrant ssh --' with SSH reverse tunnels and SendEnv. VagrantProvider interface for testability.</architecture>
+    <techStack>
+      <technology>Go 1.24</technology>
+      <technology>Bubble Tea TUI</technology>
+      <technology>Vagrant</technology>
+      <technology>VirtualBox</technology>
+      <technology>tmux</technology>
+      <technology>SSH</technology>
+    </techStack>
+    <totalTasks>27</totalTasks>
+    <totalWaves>6</totalWaves>
+    <averageParallelism>4.5</averageParallelism>
+    <maxParallelism>9</maxParallelism>
+    <criticalPathLength>6</criticalPathLength>
+  </meta>
+
+  <dependencyGraph>
+    <waves>
+      <wave number="1" name="Foundation">
+        <tasks>
+          <taskRef id="task-1.1"/>
+          <taskRef id="task-1.2"/>
+          <taskRef id="task-1.3"/>
+        </tasks>
+        <checkpoint type="user-review">
+          <message>Wave 1 complete: Config types, VagrantProvider interface, and ClaudeOptions field established.</message>
+          <reviewItems>
+            <item>VagrantSettings struct fields match design doc</item>
+            <item>VagrantProvider interface covers all Manager methods</item>
+            <item>UseVagrantMode field in ClaudeOptions with JSON tag</item>
+          </reviewItems>
+        </checkpoint>
+        <qualityGates>
+          <gate>code-review</gate>
+        </qualityGates>
+      </wave>
+
+      <wave number="2" name="Core Infrastructure">
+        <tasks>
+          <taskRef id="task-2.1"/>
+          <taskRef id="task-2.2"/>
+          <taskRef id="task-2.3"/>
+          <taskRef id="task-2.4"/>
+          <taskRef id="task-2.5"/>
+          <taskRef id="task-2.6"/>
+          <taskRef id="task-2.7"/>
+        </tasks>
+        <checkpoint type="user-review">
+          <message>Wave 2 complete: VagrantManager with full lifecycle, Vagrantfile generation, preflight checks, health monitoring, drift detection, and multi-session support.</message>
+          <reviewItems>
+            <item>Manager methods match VagrantProvider interface</item>
+            <item>Vagrantfile template interpolation correct</item>
+            <item>Preflight thresholds (5GB/10GB) match design</item>
+            <item>Health check two-phase logic</item>
+            <item>Config hash deterministic</item>
+          </reviewItems>
+        </checkpoint>
+        <qualityGates>
+          <gate>code-review</gate>
+          <gate>build-verification</gate>
+        </qualityGates>
+      </wave>
+
+      <wave number="3" name="MCP &amp; Skills">
+        <tasks>
+          <taskRef id="task-3.1"/>
+          <taskRef id="task-3.2"/>
+          <taskRef id="task-3.3"/>
+          <taskRef id="task-3.4"/>
+          <taskRef id="task-3.5"/>
+        </tasks>
+        <checkpoint type="user-review">
+          <message>Wave 3 complete: MCP config generation for Vagrant, SSH reverse tunnel support, sudo skill with credential guard, loading tips, and command wrapping.</message>
+          <reviewItems>
+            <item>WriteMCPJsonForVagrant bypasses pool sockets</item>
+            <item>CollectHTTPMCPPorts extracts localhost ports correctly</item>
+            <item>Credential guard hook patterns complete</item>
+            <item>100 tips present (50+50)</item>
+            <item>WrapCommand format matches design</item>
+          </reviewItems>
+        </checkpoint>
+        <qualityGates>
+          <gate>code-review</gate>
+          <gate>security-review</gate>
+        </qualityGates>
+      </wave>
+
+      <wave number="4" name="Instance Lifecycle">
+        <tasks>
+          <taskRef id="task-4.1"/>
+          <taskRef id="task-4.2"/>
+          <taskRef id="task-4.3"/>
+          <taskRef id="task-4.4"/>
+          <taskRef id="task-4.5"/>
+        </tasks>
+        <checkpoint type="user-review">
+          <message>Wave 4 complete: Instance lifecycle fully integrated with Vagrant.</message>
+          <reviewItems>
+            <item>vagrantProvider interface used (not concrete Manager)</item>
+            <item>vmOpDone channel + vmOpInFlight atomic pattern</item>
+            <item>restartVagrantSession state machine covers all states</item>
+            <item>Config drift triggers Provision() not Destroy()</item>
+          </reviewItems>
+        </checkpoint>
+        <qualityGates>
+          <gate>code-review</gate>
+          <gate>security-review</gate>
+        </qualityGates>
+      </wave>
+
+      <wave number="5" name="UI Integration">
+        <tasks>
+          <taskRef id="task-5.1"/>
+          <taskRef id="task-5.2"/>
+          <taskRef id="task-5.3"/>
+          <taskRef id="task-5.4"/>
+        </tasks>
+        <checkpoint type="user-review">
+          <message>Wave 5 complete: TUI checkbox, boot progress display, stale VM cleanup dialog, and Apple Silicon detection.</message>
+          <reviewItems>
+            <item>Checkbox below Teammate mode in NewDialog and ForkDialog</item>
+            <item>skipPermissions forced when vagrant checked</item>
+            <item>Boot phase + elapsed timer in session list</item>
+            <item>Shift+D cleanup dialog layout</item>
+          </reviewItems>
+        </checkpoint>
+        <qualityGates>
+          <gate>code-review</gate>
+        </qualityGates>
+      </wave>
+
+      <wave number="6" name="Hardening &amp; Polish">
+        <tasks>
+          <taskRef id="task-6.1"/>
+          <taskRef id="task-6.2"/>
+          <taskRef id="task-6.3"/>
+          <taskRef id="task-6.4"/>
+          <taskRef id="task-6.5"/>
+          <taskRef id="task-6.6"/>
+          <taskRef id="task-6.7"/>
+          <taskRef id="task-6.8"/>
+          <taskRef id="task-6.9"/>
+        </tasks>
+        <checkpoint type="user-review">
+          <message>Wave 6 complete: All unit tests written and passing. Full coverage.</message>
+          <reviewItems>
+            <item>All tests pass</item>
+            <item>go build ./... succeeds</item>
+            <item>Coverage at 80%+</item>
+          </reviewItems>
+          <manualActions>
+            <action>Manual integration test: create vagrant session in TUI</action>
+            <action>Verify MCP connectivity inside VM</action>
+          </manualActions>
+        </checkpoint>
+        <qualityGates>
+          <gate>code-review</gate>
+          <gate>build-verification</gate>
+          <gate>security-review</gate>
+        </qualityGates>
+      </wave>
+    </waves>
+  </dependencyGraph>
+
+  <phases>
+    <phase id="phase-1" name="Foundation (Config &amp; Types)">
+      <task id="task-1.1" name="VagrantSettings struct + config parsing">
+        <files>
+          <modify>internal/session/userconfig.go</modify>
+          <test>internal/session/userconfig_test.go</test>
+        </files>
+        <steps>
+          <step number="1"><action>Write tests for VagrantSettings defaults and overrides</action></step>
+          <step number="2"><action>Add VagrantSettings struct with all 14+ fields</action></step>
+          <step number="3"><action>Add PortForward struct</action></step>
+          <step number="4"><action>Add Vagrant field to UserConfig struct</action></step>
+          <step number="5"><action>Add GetVagrantSettings() with defaults</action></step>
+          <step number="6"><action>Run tests</action><command>go test ./internal/session/ -run TestGetVagrantSettings -count=1 -v</command></step>
+        </steps>
+        <agentOrchestration>
+          <model rationale="Standard struct creation with TDD">sonnet</model>
+          <delegateTo><agent>tdd-guide</agent></delegateTo>
+          <skills><skill>tdd-workflow</skill></skills>
+          <permissionMode>acceptEdits</permissionMode>
+          <estimatedComplexity>medium</estimatedComplexity>
+          <wave>1</wave>
+          <canParallelWith><taskRef id="task-1.2"/><taskRef id="task-1.3"/></canParallelWith>
+          <blockedBy/>
+        </agentOrchestration>
+        <progressTracking totalSteps="6" completedSteps="0" percentage="0" status="pending">
+          <activeForm>Adding VagrantSettings to userconfig.go</activeForm>
+        </progressTracking>
+      </task>
+
+      <task id="task-1.2" name="VagrantProvider interface">
+        <files>
+          <create>internal/vagrant/provider.go</create>
+        </files>
+        <steps>
+          <step number="1"><action>Create internal/vagrant/ package directory</action></step>
+          <step number="2"><action>Define VagrantProvider interface (24 methods)</action></step>
+          <step number="3"><action>Define BootPhase type and 8 constants</action></step>
+          <step number="4"><action>Define VMHealth struct</action></step>
+        </steps>
+        <agentOrchestration>
+          <model rationale="Interface definition is straightforward">sonnet</model>
+          <permissionMode>acceptEdits</permissionMode>
+          <estimatedComplexity>low</estimatedComplexity>
+          <wave>1</wave>
+          <canParallelWith><taskRef id="task-1.1"/><taskRef id="task-1.3"/></canParallelWith>
+          <blockedBy/>
+        </agentOrchestration>
+        <progressTracking totalSteps="4" completedSteps="0" percentage="0" status="pending">
+          <activeForm>Creating VagrantProvider interface</activeForm>
+        </progressTracking>
+      </task>
+
+      <task id="task-1.3" name="UseVagrantMode in ClaudeOptions">
+        <files>
+          <modify>internal/session/tooloptions.go</modify>
+          <test>internal/session/tooloptions_test.go</test>
+        </files>
+        <steps>
+          <step number="1"><action>Write test for UseVagrantMode forcing skip permissions</action></step>
+          <step number="2"><action>Add UseVagrantMode field to ClaudeOptions</action></step>
+          <step number="3"><action>Update ToArgs to force --dangerously-skip-permissions</action></step>
+          <step number="4"><action>Update ToArgsForFork similarly</action></step>
+          <step number="5"><action>Run tests</action><command>go test ./internal/session/ -run TestClaudeOptions -count=1 -v</command></step>
+        </steps>
+        <agentOrchestration>
+          <model rationale="Simple field addition and boolean logic">haiku</model>
+          <delegateTo><agent>tdd-guide</agent></delegateTo>
+          <skills><skill>tdd-workflow</skill></skills>
+          <permissionMode>acceptEdits</permissionMode>
+          <estimatedComplexity>low</estimatedComplexity>
+          <wave>1</wave>
+          <canParallelWith><taskRef id="task-1.1"/><taskRef id="task-1.2"/></canParallelWith>
+          <blockedBy/>
+        </agentOrchestration>
+        <progressTracking totalSteps="5" completedSteps="0" percentage="0" status="pending">
+          <activeForm>Adding UseVagrantMode to ClaudeOptions</activeForm>
+        </progressTracking>
+      </task>
+    </phase>
+
+    <!-- Phases 2-6 follow the same structure as defined in the JSON -->
+    <!-- Abbreviated for XML readability — full task details in JSON source of truth -->
+
+    <phase id="phase-2" name="Core Vagrant Manager">
+      <task id="task-2.1" name="Manager struct + basic lifecycle">
+        <agentOrchestration><model rationale="Core implementation">sonnet</model><estimatedComplexity>high</estimatedComplexity><wave>2</wave><blockedBy><taskRef id="task-1.1"/><taskRef id="task-1.2"/></blockedBy></agentOrchestration>
+        <progressTracking totalSteps="10" completedSteps="0" percentage="0" status="pending"><activeForm>Implementing VagrantManager lifecycle</activeForm></progressTracking>
+      </task>
+      <task id="task-2.2" name="Vagrantfile template generation">
+        <agentOrchestration><model rationale="Template generation">sonnet</model><estimatedComplexity>high</estimatedComplexity><wave>2</wave><blockedBy><taskRef id="task-1.1"/><taskRef id="task-1.2"/></blockedBy></agentOrchestration>
+        <progressTracking totalSteps="8" completedSteps="0" percentage="0" status="pending"><activeForm>Implementing Vagrantfile generation</activeForm></progressTracking>
+      </task>
+      <task id="task-2.3" name="Boot phase parser">
+        <agentOrchestration><model rationale="String parsing">sonnet</model><estimatedComplexity>medium</estimatedComplexity><wave>2</wave><blockedBy><taskRef id="task-1.2"/></blockedBy></agentOrchestration>
+        <progressTracking totalSteps="5" completedSteps="0" percentage="0" status="pending"><activeForm>Implementing boot phase parser</activeForm></progressTracking>
+      </task>
+      <task id="task-2.4" name="Preflight checks">
+        <agentOrchestration><model rationale="System checks">sonnet</model><estimatedComplexity>medium</estimatedComplexity><wave>2</wave><blockedBy><taskRef id="task-1.1"/><taskRef id="task-1.2"/></blockedBy></agentOrchestration>
+        <progressTracking totalSteps="6" completedSteps="0" percentage="0" status="pending"><activeForm>Implementing preflight checks</activeForm></progressTracking>
+      </task>
+      <task id="task-2.5" name="Two-phase health check">
+        <agentOrchestration><model rationale="Subprocess with timeouts">sonnet</model><estimatedComplexity>medium</estimatedComplexity><wave>2</wave><blockedBy><taskRef id="task-1.2"/></blockedBy></agentOrchestration>
+        <progressTracking totalSteps="6" completedSteps="0" percentage="0" status="pending"><activeForm>Implementing health check</activeForm></progressTracking>
+      </task>
+      <task id="task-2.6" name="Config drift detection">
+        <agentOrchestration><model rationale="Simple hashing">haiku</model><estimatedComplexity>low</estimatedComplexity><wave>2</wave><blockedBy><taskRef id="task-1.1"/><taskRef id="task-1.2"/></blockedBy></agentOrchestration>
+        <progressTracking totalSteps="5" completedSteps="0" percentage="0" status="pending"><activeForm>Implementing config drift detection</activeForm></progressTracking>
+      </task>
+      <task id="task-2.7" name="Multi-session tracking">
+        <agentOrchestration><model rationale="Concurrent tracking">sonnet</model><estimatedComplexity>medium</estimatedComplexity><wave>2</wave><blockedBy><taskRef id="task-1.2"/></blockedBy></agentOrchestration>
+        <progressTracking totalSteps="6" completedSteps="0" percentage="0" status="pending"><activeForm>Implementing multi-session tracking</activeForm></progressTracking>
+      </task>
+    </phase>
+
+    <phase id="phase-3" name="MCP &amp; Skill Integration">
+      <task id="task-3.1" name="MCP config for Vagrant">
+        <agentOrchestration><model rationale="MCP integration">sonnet</model><estimatedComplexity>high</estimatedComplexity><wave>3</wave><blockedBy><taskRef id="task-2.1"/></blockedBy></agentOrchestration>
+        <progressTracking totalSteps="6" completedSteps="0" percentage="0" status="pending"><activeForm>Implementing MCP config for Vagrant</activeForm></progressTracking>
+      </task>
+      <task id="task-3.2" name="Static skill + credential guard hook">
+        <agentOrchestration><model rationale="Security-sensitive">sonnet</model><estimatedComplexity>medium</estimatedComplexity><wave>3</wave><blockedBy><taskRef id="task-1.2"/></blockedBy></agentOrchestration>
+        <progressTracking totalSteps="6" completedSteps="0" percentage="0" status="pending"><activeForm>Implementing sudo skill and credential guard</activeForm></progressTracking>
+      </task>
+      <task id="task-3.3" name="Loading tips (100 tips)">
+        <agentOrchestration><model rationale="Data-heavy simple struct">haiku</model><estimatedComplexity>low</estimatedComplexity><wave>3</wave><blockedBy/></agentOrchestration>
+        <progressTracking totalSteps="6" completedSteps="0" percentage="0" status="pending"><activeForm>Creating loading tips file</activeForm></progressTracking>
+      </task>
+      <task id="task-3.4" name="Command wrapping with SSH tunnels">
+        <agentOrchestration><model rationale="Complex string building">sonnet</model><estimatedComplexity>high</estimatedComplexity><wave>3</wave><blockedBy><taskRef id="task-2.1"/></blockedBy></agentOrchestration>
+        <progressTracking totalSteps="5" completedSteps="0" percentage="0" status="pending"><activeForm>Implementing command wrapping</activeForm></progressTracking>
+      </task>
+      <task id="task-3.5" name="SyncClaudeConfig">
+        <agentOrchestration><model rationale="File I/O and SSH">sonnet</model><estimatedComplexity>medium</estimatedComplexity><wave>3</wave><blockedBy><taskRef id="task-2.1"/></blockedBy></agentOrchestration>
+        <progressTracking totalSteps="3" completedSteps="0" percentage="0" status="pending"><activeForm>Implementing SyncClaudeConfig</activeForm></progressTracking>
+      </task>
+    </phase>
+
+    <phase id="phase-4" name="Instance Lifecycle Integration">
+      <task id="task-4.1" name="Instance vagrant lifecycle hooks">
+        <agentOrchestration><model rationale="Complex goroutine coordination">opus</model><estimatedComplexity>high</estimatedComplexity><wave>4</wave><blockedBy><taskRef id="task-3.1"/><taskRef id="task-3.2"/><taskRef id="task-3.4"/><taskRef id="task-3.5"/></blockedBy></agentOrchestration>
+        <progressTracking totalSteps="8" completedSteps="0" percentage="0" status="pending"><activeForm>Integrating vagrant lifecycle</activeForm></progressTracking>
+      </task>
+      <task id="task-4.2" name="Vagrant restart flow">
+        <agentOrchestration><model rationale="State machine">sonnet</model><estimatedComplexity>medium</estimatedComplexity><wave>4</wave><blockedBy><taskRef id="task-4.1"/></blockedBy></agentOrchestration>
+        <progressTracking totalSteps="4" completedSteps="0" percentage="0" status="pending"><activeForm>Implementing restart flow</activeForm></progressTracking>
+      </task>
+      <task id="task-4.3" name="Health check in UpdateStatus">
+        <agentOrchestration><model rationale="Integration into polling">sonnet</model><estimatedComplexity>medium</estimatedComplexity><wave>4</wave><blockedBy><taskRef id="task-4.1"/></blockedBy></agentOrchestration>
+        <progressTracking totalSteps="5" completedSteps="0" percentage="0" status="pending"><activeForm>Integrating health check</activeForm></progressTracking>
+      </task>
+      <task id="task-4.4" name="Config drift in Start">
+        <agentOrchestration><model rationale="Simple conditional">haiku</model><estimatedComplexity>low</estimatedComplexity><wave>4</wave><blockedBy><taskRef id="task-3.1"/><taskRef id="task-3.4"/></blockedBy></agentOrchestration>
+        <progressTracking totalSteps="3" completedSteps="0" percentage="0" status="pending"><activeForm>Adding drift check</activeForm></progressTracking>
+      </task>
+      <task id="task-4.5" name="Multi-session prompt">
+        <agentOrchestration><model rationale="Multi-session logic">sonnet</model><estimatedComplexity>medium</estimatedComplexity><wave>4</wave><blockedBy><taskRef id="task-4.1"/></blockedBy></agentOrchestration>
+        <progressTracking totalSteps="5" completedSteps="0" percentage="0" status="pending"><activeForm>Implementing share/separate flow</activeForm></progressTracking>
+      </task>
+    </phase>
+
+    <phase id="phase-5" name="UI Integration">
+      <task id="task-5.1" name="Vagrant mode checkbox">
+        <agentOrchestration><model rationale="TUI checkbox pattern">sonnet</model><estimatedComplexity>medium</estimatedComplexity><wave>5</wave><blockedBy><taskRef id="task-1.3"/></blockedBy></agentOrchestration>
+        <progressTracking totalSteps="6" completedSteps="0" percentage="0" status="pending"><activeForm>Adding checkbox to TUI</activeForm></progressTracking>
+      </task>
+      <task id="task-5.2" name="Boot progress display">
+        <agentOrchestration><model rationale="TUI rendering">sonnet</model><estimatedComplexity>medium</estimatedComplexity><wave>5</wave><blockedBy><taskRef id="task-4.1"/><taskRef id="task-3.3"/></blockedBy></agentOrchestration>
+        <progressTracking totalSteps="4" completedSteps="0" percentage="0" status="pending"><activeForm>Adding boot progress</activeForm></progressTracking>
+      </task>
+      <task id="task-5.3" name="Stale VM cleanup">
+        <agentOrchestration><model rationale="TUI dialog">sonnet</model><estimatedComplexity>medium</estimatedComplexity><wave>5</wave><blockedBy><taskRef id="task-4.1"/></blockedBy></agentOrchestration>
+        <progressTracking totalSteps="5" completedSteps="0" percentage="0" status="pending"><activeForm>Implementing cleanup dialog</activeForm></progressTracking>
+      </task>
+      <task id="task-5.4" name="Apple Silicon kext detection">
+        <agentOrchestration><model rationale="Simple error surfacing">haiku</model><estimatedComplexity>low</estimatedComplexity><wave>5</wave><blockedBy><taskRef id="task-4.1"/><taskRef id="task-2.3"/></blockedBy></agentOrchestration>
+        <progressTracking totalSteps="3" completedSteps="0" percentage="0" status="pending"><activeForm>Adding kext detection</activeForm></progressTracking>
+      </task>
+    </phase>
+
+    <phase id="phase-6" name="Testing &amp; Hardening">
+      <task id="task-6.1" name="MockVagrantProvider">
+        <agentOrchestration><model rationale="Boilerplate mock">haiku</model><estimatedComplexity>low</estimatedComplexity><wave>6</wave><blockedBy><taskRef id="task-2.1"/></blockedBy></agentOrchestration>
+        <progressTracking totalSteps="5" completedSteps="0" percentage="0" status="pending"><activeForm>Creating mock provider</activeForm></progressTracking>
+      </task>
+      <task id="task-6.2" name="Manager unit tests"><agentOrchestration><model>sonnet</model><wave>6</wave></agentOrchestration><progressTracking totalSteps="3" completedSteps="0" percentage="0" status="pending"><activeForm>Verifying manager tests</activeForm></progressTracking></task>
+      <task id="task-6.3" name="MCP unit tests"><agentOrchestration><model>haiku</model><wave>6</wave></agentOrchestration><progressTracking totalSteps="2" completedSteps="0" percentage="0" status="pending"><activeForm>Verifying MCP tests</activeForm></progressTracking></task>
+      <task id="task-6.4" name="Health check tests"><agentOrchestration><model>haiku</model><wave>6</wave></agentOrchestration><progressTracking totalSteps="2" completedSteps="0" percentage="0" status="pending"><activeForm>Verifying health tests</activeForm></progressTracking></task>
+      <task id="task-6.5" name="Instance lifecycle tests"><agentOrchestration><model>sonnet</model><wave>6</wave></agentOrchestration><progressTracking totalSteps="2" completedSteps="0" percentage="0" status="pending"><activeForm>Writing lifecycle tests</activeForm></progressTracking></task>
+      <task id="task-6.6" name="Credential guard tests"><agentOrchestration><model>haiku</model><wave>6</wave></agentOrchestration><progressTracking totalSteps="2" completedSteps="0" percentage="0" status="pending"><activeForm>Verifying credential tests</activeForm></progressTracking></task>
+      <task id="task-6.7" name="Config drift tests"><agentOrchestration><model>haiku</model><wave>6</wave></agentOrchestration><progressTracking totalSteps="1" completedSteps="0" percentage="0" status="pending"><activeForm>Verifying drift tests</activeForm></progressTracking></task>
+      <task id="task-6.8" name="Tips tests"><agentOrchestration><model>haiku</model><wave>6</wave></agentOrchestration><progressTracking totalSteps="1" completedSteps="0" percentage="0" status="pending"><activeForm>Verifying tips tests</activeForm></progressTracking></task>
+      <task id="task-6.9" name="UI tests"><agentOrchestration><model>sonnet</model><wave>6</wave></agentOrchestration><progressTracking totalSteps="2" completedSteps="0" percentage="0" status="pending"><activeForm>Writing UI tests</activeForm></progressTracking></task>
+    </phase>
+  </phases>
+</agentPlan>

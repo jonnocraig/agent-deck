@@ -11,6 +11,7 @@ All options for `~/.agent-deck/config.toml`.
 - [[updates] Section](#updates-section)
 - [[global_search] Section](#global_search-section)
 - [[mcp_pool] Section](#mcp_pool-section)
+- [[vagrant] Section](#vagrant-section)
 - [[mcps.*] Section](#mcps-section)
 - [[tools.*] Section](#tools-section)
 
@@ -133,6 +134,102 @@ show_pool_status = true     # Show 🔌 indicator
 **Benefits:** 30 sessions x 5 MCPs = 150 processes -> 5 shared processes (90% memory savings).
 
 **Socket location:** `/tmp/agentdeck-mcp-{name}.sock`
+
+## [vagrant] Section
+
+Vagrant VM configuration for isolated development environments with unrestricted access.
+
+```toml
+[vagrant]
+memory_mb = 8192
+cpus = 4
+box = "bento/ubuntu-24.04"
+auto_suspend = true
+auto_destroy = false
+health_check_interval = 30
+npm_packages = ["typescript", "vite"]
+
+[[vagrant.port_forwards]]
+guest = 3000
+host = 3000
+
+[[vagrant.port_forwards]]
+guest = 5432
+host = 5432
+```
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `memory_mb` | int | `4096` | VM memory in MB. |
+| `cpus` | int | `2` | Number of vCPUs allocated to the VM. |
+| `box` | string | `"bento/ubuntu-24.04"` | Vagrant box image to use. |
+| `auto_suspend` | bool | `true` | Automatically suspend VM when session stops. |
+| `auto_destroy` | bool | `false` | Automatically destroy VM when session is deleted. |
+| `health_check_interval` | int | `30` | Health check interval in seconds. |
+| `host_gateway_ip` | string | `"10.0.2.2"` | Host gateway IP for NAT networking. |
+| `synced_folder_type` | string | `"virtualbox"` | Sync type: `virtualbox`, `nfs`, `rsync`, or empty for default. |
+| `provision_packages` | array | `[]` | Additional system packages to install (appended to base set). |
+| `provision_packages_exclude` | array | `[]` | System packages to exclude from the base installation set. |
+| `npm_packages` | array | `[]` | Global npm packages to install in the VM. |
+| `provision_script` | string | `""` | Path to custom shell script for provisioning (runs after base setup). |
+| `vagrantfile` | string | `""` | Path to custom Vagrantfile (disables auto-generation when set). |
+| `port_forwards` | array | `[]` | Port forwarding rules (see below). |
+| `env` | map | `{}` | Additional environment variables to set in VM sessions. |
+| `forward_proxy_env` | bool | `true` | Forward host proxy environment variables to the VM. |
+
+### Port Forwarding
+
+Define port forwards as array of tables under `[[vagrant.port_forwards]]`:
+
+```toml
+[[vagrant.port_forwards]]
+guest = 3000        # Port inside VM
+host = 3000         # Port on host
+protocol = "tcp"    # "tcp" (default) or "udp"
+```
+
+### Examples
+
+**Minimal setup (2GB RAM, 2 CPUs):**
+
+```toml
+[vagrant]
+memory_mb = 2048
+cpus = 2
+```
+
+**Web development (8GB RAM, 4 CPUs, npm packages, port forwarding):**
+
+```toml
+[vagrant]
+memory_mb = 8192
+cpus = 4
+box = "bento/ubuntu-24.04"
+npm_packages = ["typescript", "vite", "eslint"]
+provision_packages = ["postgresql", "redis-server"]
+
+[[vagrant.port_forwards]]
+guest = 3000
+host = 3000
+protocol = "tcp"
+
+[[vagrant.port_forwards]]
+guest = 5432
+host = 5432
+protocol = "tcp"
+```
+
+**Custom provisioning with excluded packages:**
+
+```toml
+[vagrant]
+memory_mb = 4096
+cpus = 2
+provision_script = "~/vm-setup.sh"
+provision_packages_exclude = ["nodejs"]   # Don't install default nodejs
+env = { DATABASE_URL = "postgres://localhost/mydb", NODE_ENV = "development" }
+forward_proxy_env = true
+```
 
 ## [mcps.*] Section
 

@@ -681,8 +681,11 @@ func TestSyncClaudeSessionFromDisk_PicksUpNewerSession(t *testing.T) {
 	oldSessionID := "11111111-1111-1111-1111-111111111111"
 	newSessionID := "22222222-2222-2222-2222-222222222222"
 
+	// Both files need real conversation data (contain "sessionId") to pass the quality gate.
+	// This simulates /clear: old session had conversation, new session starts with data too.
+	oldContent := `{"sessionId":"` + oldSessionID + `","type":"progress"}`
 	oldPath := filepath.Join(projectDir, oldSessionID+".jsonl")
-	if err := os.WriteFile(oldPath, []byte("{}"), 0644); err != nil {
+	if err := os.WriteFile(oldPath, []byte(oldContent), 0644); err != nil {
 		t.Fatal(err)
 	}
 	pastTime := time.Now().Add(-30 * time.Second)
@@ -690,7 +693,8 @@ func TestSyncClaudeSessionFromDisk_PicksUpNewerSession(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := os.WriteFile(filepath.Join(projectDir, newSessionID+".jsonl"), []byte("{}"), 0644); err != nil {
+	newContent := `{"sessionId":"` + newSessionID + `","type":"progress"}`
+	if err := os.WriteFile(filepath.Join(projectDir, newSessionID+".jsonl"), []byte(newContent), 0644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -804,6 +808,158 @@ func TestSyncClaudeSessionFromDisk_SkipsNonClaude(t *testing.T) {
 	inst.syncClaudeSessionFromDisk()
 	if inst.ClaudeSessionID != "should-not-change" {
 		t.Error("syncClaudeSessionFromDisk should be a no-op for non-claude tools")
+	}
+}
+
+// TestSyncClaudeSessionFromDisk_RejectsZombie verifies that a real current session
+// is NOT replaced by a zombie candidate (file with no conversation data).
+func TestSyncClaudeSessionFromDisk_RejectsZombie(t *testing.T) {
+	configDir := t.TempDir()
+	origConfigDir := os.Getenv("CLAUDE_CONFIG_DIR")
+	os.Setenv("CLAUDE_CONFIG_DIR", configDir)
+	defer func() {
+		if origConfigDir != "" {
+			os.Setenv("CLAUDE_CONFIG_DIR", origConfigDir)
+		} else {
+			os.Unsetenv("CLAUDE_CONFIG_DIR")
+		}
+	}()
+
+	projectPath := "/Users/test/zombie-reject-project"
+	projectDirName := ConvertToClaudeDirName(projectPath)
+	projectDir := filepath.Join(configDir, "projects", projectDirName)
+	if err := os.MkdirAll(projectDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	realID := "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	zombieID := "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+
+	// Real session: has conversation data
+	realContent := `{"sessionId":"` + realID + `","type":"progress"}`
+	realPath := filepath.Join(projectDir, realID+".jsonl")
+	if err := os.WriteFile(realPath, []byte(realContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(realPath, time.Now().Add(-30*time.Second), time.Now().Add(-30*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+
+	// Zombie session: newer modification time but no conversation data
+	zombiePath := filepath.Join(projectDir, zombieID+".jsonl")
+	if err := os.WriteFile(zombiePath, []byte(`{"type":"file-history-snapshot"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	inst := NewInstanceWithTool("zombie-reject-test", projectPath, "claude")
+	inst.ClaudeSessionID = realID
+	inst.ClaudeDetectedAt = time.Now().Add(-1 * time.Minute)
+
+	inst.syncClaudeSessionFromDisk()
+
+	if inst.ClaudeSessionID != realID {
+		t.Errorf("ClaudeSessionID = %q, want %q (real session should NOT be replaced by zombie)", inst.ClaudeSessionID, realID)
+	}
+}
+
+// TestSyncClaudeSessionFromDisk_AcceptsRealOverZombie verifies that a zombie current
+// session IS replaced by a real candidate (upgrade from zombie to real).
+func TestSyncClaudeSessionFromDisk_AcceptsRealOverZombie(t *testing.T) {
+	configDir := t.TempDir()
+	origConfigDir := os.Getenv("CLAUDE_CONFIG_DIR")
+	os.Setenv("CLAUDE_CONFIG_DIR", configDir)
+	defer func() {
+		if origConfigDir != "" {
+			os.Setenv("CLAUDE_CONFIG_DIR", origConfigDir)
+		} else {
+			os.Unsetenv("CLAUDE_CONFIG_DIR")
+		}
+	}()
+
+	projectPath := "/Users/test/zombie-upgrade-project"
+	projectDirName := ConvertToClaudeDirName(projectPath)
+	projectDir := filepath.Join(configDir, "projects", projectDirName)
+	if err := os.MkdirAll(projectDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	zombieID := "cccccccc-cccc-cccc-cccc-cccccccccccc"
+	realID := "dddddddd-dddd-dddd-dddd-dddddddddddd"
+
+	// Zombie current: no conversation data
+	zombiePath := filepath.Join(projectDir, zombieID+".jsonl")
+	if err := os.WriteFile(zombiePath, []byte(`{"type":"file-history-snapshot"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(zombiePath, time.Now().Add(-30*time.Second), time.Now().Add(-30*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+
+	// Real candidate: has conversation data, newer
+	realContent := `{"sessionId":"` + realID + `","type":"progress"}`
+	realPath := filepath.Join(projectDir, realID+".jsonl")
+	if err := os.WriteFile(realPath, []byte(realContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	inst := NewInstanceWithTool("zombie-upgrade-test", projectPath, "claude")
+	inst.ClaudeSessionID = zombieID
+	inst.ClaudeDetectedAt = time.Now().Add(-1 * time.Minute)
+
+	inst.syncClaudeSessionFromDisk()
+
+	if inst.ClaudeSessionID != realID {
+		t.Errorf("ClaudeSessionID = %q, want %q (zombie should be upgraded to real session)", inst.ClaudeSessionID, realID)
+	}
+}
+
+// TestSyncClaudeSessionFromDisk_RejectsBothZombies verifies that when both the
+// current and candidate sessions are zombies, the current is kept (no pointless swap).
+func TestSyncClaudeSessionFromDisk_RejectsBothZombies(t *testing.T) {
+	configDir := t.TempDir()
+	origConfigDir := os.Getenv("CLAUDE_CONFIG_DIR")
+	os.Setenv("CLAUDE_CONFIG_DIR", configDir)
+	defer func() {
+		if origConfigDir != "" {
+			os.Setenv("CLAUDE_CONFIG_DIR", origConfigDir)
+		} else {
+			os.Unsetenv("CLAUDE_CONFIG_DIR")
+		}
+	}()
+
+	projectPath := "/Users/test/both-zombies-project"
+	projectDirName := ConvertToClaudeDirName(projectPath)
+	projectDir := filepath.Join(configDir, "projects", projectDirName)
+	if err := os.MkdirAll(projectDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	zombieA := "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
+	zombieB := "ffffffff-ffff-ffff-ffff-ffffffffffff"
+
+	// Zombie A (current): no conversation data
+	zombieAPath := filepath.Join(projectDir, zombieA+".jsonl")
+	if err := os.WriteFile(zombieAPath, []byte(`{"type":"file-history-snapshot"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(zombieAPath, time.Now().Add(-30*time.Second), time.Now().Add(-30*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+
+	// Zombie B (candidate): also no conversation data, but newer
+	zombieBPath := filepath.Join(projectDir, zombieB+".jsonl")
+	if err := os.WriteFile(zombieBPath, []byte(`{"type":"file-history-snapshot"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	inst := NewInstanceWithTool("both-zombies-test", projectPath, "claude")
+	inst.ClaudeSessionID = zombieA
+	inst.ClaudeDetectedAt = time.Now().Add(-1 * time.Minute)
+
+	inst.syncClaudeSessionFromDisk()
+
+	if inst.ClaudeSessionID != zombieA {
+		t.Errorf("ClaudeSessionID = %q, want %q (should not swap between zombies)", inst.ClaudeSessionID, zombieA)
 	}
 }
 
@@ -1906,4 +2062,865 @@ func TestBuildClaudeExtraFlags_NilOpts(t *testing.T) {
 	if strings.Contains(flags, "--allow-dangerously-skip-permissions") {
 		t.Errorf("nil opts should not add permission flags, got %q", flags)
 	}
+}
+
+// TestBuildClaudeCommand_ExportsInstanceID verifies that AGENTDECK_INSTANCE_ID
+// is included in the command string for Claude sessions.
+func TestBuildClaudeCommand_ExportsInstanceID(t *testing.T) {
+	origConfigDir := os.Getenv("CLAUDE_CONFIG_DIR")
+	origHome := os.Getenv("HOME")
+	os.Unsetenv("CLAUDE_CONFIG_DIR")
+	os.Setenv("HOME", t.TempDir())
+	ClearUserConfigCache()
+	defer func() {
+		if origConfigDir != "" {
+			os.Setenv("CLAUDE_CONFIG_DIR", origConfigDir)
+		}
+		os.Setenv("HOME", origHome)
+		ClearUserConfigCache()
+	}()
+
+	inst := NewInstanceWithTool("test", "/tmp/test", "claude")
+	cmd := inst.buildClaudeCommand("claude")
+
+	// AGENTDECK_INSTANCE_ID should be in the command as an env var prefix
+	expectedPrefix := "AGENTDECK_INSTANCE_ID=" + inst.ID
+	if !strings.Contains(cmd, expectedPrefix) {
+		t.Errorf("Command should contain %q, got: %s", expectedPrefix, cmd)
+	}
+}
+
+// TestBuildClaudeResumeCommand_ExportsInstanceID verifies that AGENTDECK_INSTANCE_ID
+// is included in the resume command string.
+func TestBuildClaudeResumeCommand_ExportsInstanceID(t *testing.T) {
+	origConfigDir := os.Getenv("CLAUDE_CONFIG_DIR")
+	origHome := os.Getenv("HOME")
+	os.Unsetenv("CLAUDE_CONFIG_DIR")
+	os.Setenv("HOME", t.TempDir())
+	ClearUserConfigCache()
+	defer func() {
+		if origConfigDir != "" {
+			os.Setenv("CLAUDE_CONFIG_DIR", origConfigDir)
+		}
+		os.Setenv("HOME", origHome)
+		ClearUserConfigCache()
+	}()
+
+	inst := NewInstanceWithTool("test", "/tmp/test", "claude")
+	inst.ClaudeSessionID = "abc-123-def"
+
+	cmd := inst.buildClaudeResumeCommand()
+
+	expectedPrefix := "AGENTDECK_INSTANCE_ID=" + inst.ID
+	if !strings.Contains(cmd, expectedPrefix) {
+		t.Errorf("Resume command should contain %q, got: %s", expectedPrefix, cmd)
+	}
+}
+
+// TestInstance_HookFastPath tests that UpdateStatus uses hook data when fresh.
+func TestInstance_HookFastPath(t *testing.T) {
+	inst := NewInstanceWithTool("hook-test", "/tmp/test", "claude")
+
+	// Set fresh hook data
+	inst.hookStatus = "running"
+	inst.hookLastUpdate = time.Now()
+
+	status, fresh := inst.GetHookStatus()
+	if status != "running" {
+		t.Errorf("GetHookStatus() status = %q, want running", status)
+	}
+	if !fresh {
+		t.Error("GetHookStatus() should report fresh for recent update")
+	}
+}
+
+// TestInstance_HookFastPath_Stale tests that stale hook data is not used.
+func TestInstance_HookFastPath_Stale(t *testing.T) {
+	inst := NewInstanceWithTool("hook-stale-test", "/tmp/test", "claude")
+
+	// Hook data older than 2 minutes is stale (safety net for crashes)
+	inst.hookStatus = "running"
+	inst.hookLastUpdate = time.Now().Add(-3 * time.Minute)
+
+	status, fresh := inst.GetHookStatus()
+	if status != "running" {
+		t.Errorf("GetHookStatus() status = %q, want running", status)
+	}
+	if fresh {
+		t.Error("GetHookStatus() should report stale after 2 minutes")
+	}
+}
+
+// TestInstance_UpdateHookStatus tests the UpdateHookStatus method.
+func TestInstance_UpdateHookStatus(t *testing.T) {
+	inst := NewInstanceWithTool("hook-update-test", "/tmp/test", "claude")
+
+	// Update with hook status
+	hookStatus := &HookStatus{
+		Status:    "waiting",
+		SessionID: "hook-session-123",
+		Event:     "PermissionRequest",
+		UpdatedAt: time.Now(),
+	}
+	inst.UpdateHookStatus(hookStatus)
+
+	// Verify fields were set
+	if inst.hookStatus != "waiting" {
+		t.Errorf("hookStatus = %q, want waiting", inst.hookStatus)
+	}
+	if inst.ClaudeSessionID != "hook-session-123" {
+		t.Errorf("ClaudeSessionID = %q, want hook-session-123", inst.ClaudeSessionID)
+	}
+}
+
+// mockVagrantVM is a mock implementation of VagrantVM for testing multi-session logic.
+type mockVagrantVM struct {
+	status           string
+	statusErr        error
+	sessionCount     int
+	bootCalled       bool
+	dotfilePath      string
+	registerCalls    []string
+	PreflightCheckFn func() error
+	BootFn           func() error
+	SuspendFn        func() error
+	DestroyFn        func() error
+	UnregisterFn     func(string)
+}
+
+func (m *mockVagrantVM) PreflightCheck() error {
+	if m.PreflightCheckFn != nil {
+		return m.PreflightCheckFn()
+	}
+	return nil
+}
+func (m *mockVagrantVM) EnsureVagrantfile() error { return nil }
+func (m *mockVagrantVM) EnsureSudoSkill() error   { return nil }
+func (m *mockVagrantVM) Boot() error {
+	if m.BootFn != nil {
+		return m.BootFn()
+	}
+	m.bootCalled = true
+	return nil
+}
+func (m *mockVagrantVM) Suspend() error {
+	if m.SuspendFn != nil {
+		return m.SuspendFn()
+	}
+	return nil
+}
+func (m *mockVagrantVM) Resume() error       { return nil }
+func (m *mockVagrantVM) Destroy() error {
+	if m.DestroyFn != nil {
+		return m.DestroyFn()
+	}
+	return nil
+}
+func (m *mockVagrantVM) ForceRestart() error  { return nil }
+func (m *mockVagrantVM) Reload() error        { return nil }
+func (m *mockVagrantVM) Provision() error     { return nil }
+func (m *mockVagrantVM) Status() (string, error) { return m.status, m.statusErr }
+func (m *mockVagrantVM) HealthCheck() (VMHealthResult, error) {
+	return VMHealthResult{State: m.status, Healthy: true, Responsive: true}, nil
+}
+func (m *mockVagrantVM) WrapCommand(cmd string, _ []string, _ []int) string { return "vagrant-ssh -- " + cmd }
+func (m *mockVagrantVM) SyncClaudeConfig() error                           { return nil }
+func (m *mockVagrantVM) WriteMCPJson(_ string, _ []string) error           { return nil }
+func (m *mockVagrantVM) CollectEnvVarNames(_ []string, _ map[string]string) []string { return nil }
+func (m *mockVagrantVM) CollectTunnelPorts(_ []string) []int                         { return nil }
+func (m *mockVagrantVM) HasConfigDrift() bool                                        { return false }
+func (m *mockVagrantVM) WriteConfigHash() error                                      { return nil }
+func (m *mockVagrantVM) RegisterSession(id string) error {
+	m.registerCalls = append(m.registerCalls, id)
+	return nil
+}
+func (m *mockVagrantVM) UnregisterSession(id string) error {
+	if m.UnregisterFn != nil {
+		m.UnregisterFn(id)
+	}
+	return nil
+}
+func (m *mockVagrantVM) SessionCount() int                                 { return m.sessionCount }
+func (m *mockVagrantVM) IsLastSession(_ string) bool                       { return m.sessionCount <= 1 }
+func (m *mockVagrantVM) SetDotfilePath(id string)                          { m.dotfilePath = id }
+func (m *mockVagrantVM) IsInstalled() bool                                 { return true }
+func (m *mockVagrantVM) IsBoxCached() bool                                 { return true }
+
+// TestVagrantMultiSession_ShareSkipsBoot tests that sharing an existing VM skips Boot().
+func TestVagrantMultiSession_ShareSkipsBoot(t *testing.T) {
+	mock := &mockVagrantVM{status: "running", sessionCount: 1}
+	inst := NewInstance("test-share", "/tmp/test")
+	inst.vagrantProvider = mock
+
+	cmd, err := inst.applyVagrantWrapper("claude --resume")
+	if err != nil {
+		t.Fatalf("applyVagrantWrapper failed: %v", err)
+	}
+
+	// Share mode (default): should NOT call Boot() since VM is already running
+	if mock.bootCalled {
+		t.Error("Boot() should not be called when sharing an existing running VM")
+	}
+
+	// Should still register the session
+	if len(mock.registerCalls) != 1 || mock.registerCalls[0] != inst.ID {
+		t.Errorf("RegisterSession not called correctly: %v", mock.registerCalls)
+	}
+
+	// Command should be wrapped
+	if cmd == "" {
+		t.Error("wrapped command should not be empty")
+	}
+}
+
+// TestVagrantMultiSession_SeparateCallsBootWithDotfile tests that separate VM mode boots a new VM.
+func TestVagrantMultiSession_SeparateCallsBootWithDotfile(t *testing.T) {
+	mock := &mockVagrantVM{status: "running", sessionCount: 1}
+	inst := NewInstance("test-separate", "/tmp/test")
+	inst.vagrantProvider = mock
+	inst.VagrantSeparateVM = true
+
+	_, err := inst.applyVagrantWrapper("claude --resume")
+	if err != nil {
+		t.Fatalf("applyVagrantWrapper failed: %v", err)
+	}
+
+	// Separate mode: should call SetDotfilePath and Boot
+	if mock.dotfilePath != inst.ID {
+		t.Errorf("SetDotfilePath should be called with session ID, got %q", mock.dotfilePath)
+	}
+	if !mock.bootCalled {
+		t.Error("Boot() should be called for separate VM mode")
+	}
+}
+
+// TestVagrantMultiSession_NoExistingVM tests normal boot when no VM is running.
+func TestVagrantMultiSession_NoExistingVM(t *testing.T) {
+	mock := &mockVagrantVM{status: "not_created", sessionCount: 0}
+	inst := NewInstance("test-fresh", "/tmp/test")
+	inst.vagrantProvider = mock
+
+	_, err := inst.applyVagrantWrapper("claude --resume")
+	if err != nil {
+		t.Fatalf("applyVagrantWrapper failed: %v", err)
+	}
+
+	// Should call Boot() normally
+	if !mock.bootCalled {
+		t.Error("Boot() should be called when no VM exists")
+	}
+}
+
+// TestForkInheritsVagrantSeparateVM tests that forked sessions inherit the parent's VM sharing choice.
+func TestForkInheritsVagrantSeparateVM(t *testing.T) {
+	// Isolate from user's environment
+	origConfigDir := os.Getenv("CLAUDE_CONFIG_DIR")
+	origHome := os.Getenv("HOME")
+	os.Unsetenv("CLAUDE_CONFIG_DIR")
+	os.Setenv("HOME", t.TempDir())
+	ClearUserConfigCache()
+	defer func() {
+		if origConfigDir != "" {
+			os.Setenv("CLAUDE_CONFIG_DIR", origConfigDir)
+		}
+		os.Setenv("HOME", origHome)
+		ClearUserConfigCache()
+	}()
+
+	t.Run("separate VM inherited", func(t *testing.T) {
+		parent := NewInstance("parent", "/tmp/test")
+		parent.ClaudeSessionID = "abc-123"
+		parent.ClaudeDetectedAt = time.Now()
+		parent.VagrantSeparateVM = true
+
+		forked, _, err := parent.CreateForkedInstance("child", "")
+		if err != nil {
+			t.Fatalf("CreateForkedInstance failed: %v", err)
+		}
+		if !forked.VagrantSeparateVM {
+			t.Error("forked instance should inherit VagrantSeparateVM=true from parent")
+		}
+	})
+
+	t.Run("shared VM inherited (default)", func(t *testing.T) {
+		parent := NewInstance("parent", "/tmp/test")
+		parent.ClaudeSessionID = "def-456"
+		parent.ClaudeDetectedAt = time.Now()
+		parent.VagrantSeparateVM = false
+
+		forked, _, err := parent.CreateForkedInstance("child", "")
+		if err != nil {
+			t.Fatalf("CreateForkedInstance failed: %v", err)
+		}
+		if forked.VagrantSeparateVM {
+			t.Error("forked instance should inherit VagrantSeparateVM=false from parent")
+		}
+	})
+}
+
+// TestInstance_UpdateHookStatus_Nil tests UpdateHookStatus with nil input.
+func TestInstance_UpdateHookStatus_Nil(t *testing.T) {
+	inst := NewInstanceWithTool("hook-nil-test", "/tmp/test", "claude")
+
+	// Should not panic
+	inst.UpdateHookStatus(nil)
+
+	if inst.hookStatus != "" {
+		t.Errorf("hookStatus should be empty, got %q", inst.hookStatus)
+	}
+}
+
+// TestMockProviderStartLifecycle verifies applyVagrantWrapper calls methods in order
+func TestMockProviderStartLifecycle(t *testing.T) {
+	callOrder := []string{}
+
+	mock := &mockVagrantVM{
+		status:       "not_created",
+		sessionCount: 0,
+	}
+
+	// Track Boot call order
+	mock.BootFn = func() error {
+		callOrder = append(callOrder, "Boot")
+		mock.bootCalled = true
+		return nil
+	}
+
+	inst := NewInstance("test-lifecycle", "/tmp/test")
+	inst.vagrantProvider = mock
+
+	_, err := inst.applyVagrantWrapper("claude --resume")
+	if err != nil {
+		t.Fatalf("applyVagrantWrapper failed: %v", err)
+	}
+
+	// Verify Boot was called
+	if !mock.bootCalled {
+		t.Error("Boot() should be called during applyVagrantWrapper")
+	}
+
+	// Verify session was registered
+	if len(mock.registerCalls) != 1 {
+		t.Errorf("expected 1 RegisterSession call, got %d", len(mock.registerCalls))
+	}
+}
+
+// TestStartWaitsForInFlightSuspend verifies waitForVagrantOp is called
+func TestStartWaitsForInFlightSuspend(t *testing.T) {
+	mock := &mockVagrantVM{
+		status:       "running",
+		sessionCount: 0,
+	}
+
+	inst := NewInstance("test-wait", "/tmp/test")
+	inst.vagrantProvider = mock
+
+	// Set vmOpInFlight to simulate in-flight operation
+	inst.vmOpInFlight.Store(true)
+	inst.vmOpDone = make(chan struct{})
+
+	// Start goroutine to signal completion after short delay
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		inst.vmOpInFlight.Store(false)
+		close(inst.vmOpDone)
+	}()
+
+	start := time.Now()
+	_, err := inst.applyVagrantWrapper("claude --resume")
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("applyVagrantWrapper failed: %v", err)
+	}
+
+	// Should have waited at least 50ms
+	if elapsed < 50*time.Millisecond {
+		t.Errorf("expected to wait for in-flight operation, elapsed: %v", elapsed)
+	}
+}
+
+// TestErrorMessageSetOnBootFailure verifies ErrorMessage field is set when Boot() fails
+func TestErrorMessageSetOnBootFailure(t *testing.T) {
+	mock := &mockVagrantVM{
+		status:       "not_created",
+		sessionCount: 0,
+	}
+
+	// Override Boot to return an error
+	mock.BootFn = func() error {
+		return fmt.Errorf("VirtualBox kernel module not loaded")
+	}
+
+	inst := NewInstance("test-boot-error", "/tmp/test")
+	inst.vagrantProvider = mock
+
+	_, err := inst.applyVagrantWrapper("claude --resume")
+	if err == nil {
+		t.Fatal("expected error from Boot failure, got nil")
+	}
+
+	// Verify ErrorMessage was set
+	if inst.ErrorMessage == "" {
+		t.Error("ErrorMessage should be set when Boot() fails")
+	}
+
+	// Verify Status is error
+	if inst.Status != StatusError {
+		t.Errorf("Status should be 'error', got %q", inst.Status)
+	}
+}
+
+// TestErrorMessageSetOnPreflightFailure verifies ErrorMessage is set on preflight failure
+func TestErrorMessageSetOnPreflightFailure(t *testing.T) {
+	mock := &mockVagrantVM{
+		status:       "not_created",
+		sessionCount: 0,
+	}
+
+	// Override PreflightCheck to return an error
+	mock.PreflightCheckFn = func() error {
+		return fmt.Errorf("VirtualBox not found. Install from https://www.virtualbox.org/wiki/Downloads")
+	}
+
+	inst := NewInstance("test-preflight-error", "/tmp/test")
+	inst.vagrantProvider = mock
+
+	_, err := inst.applyVagrantWrapper("claude --resume")
+	if err == nil {
+		t.Fatal("expected error from PreflightCheck failure, got nil")
+	}
+
+	// Verify ErrorMessage was set
+	if inst.ErrorMessage == "" {
+		t.Error("ErrorMessage should be set when PreflightCheck() fails")
+	}
+
+	// Verify Status is error
+	if inst.Status != StatusError {
+		t.Errorf("Status should be 'error', got %q", inst.Status)
+	}
+}
+
+// TestExtractErrorMessage tests the extractErrorMessage helper function.
+func TestExtractErrorMessage(t *testing.T) {
+	tests := []struct {
+		name    string
+		err     error
+		want    string
+	}{
+		{
+			name: "nil error",
+			err:  nil,
+			want: "",
+		},
+		{
+			name: "simple error",
+			err:  fmt.Errorf("simple error message"),
+			want: "simple error message",
+		},
+		{
+			name: "error with newline",
+			err:  fmt.Errorf("first line\nsecond line\nthird line"),
+			want: "first line",
+		},
+		{
+			name: "wrapped error",
+			err:  fmt.Errorf("outer: %w", fmt.Errorf("inner error\nwith details")),
+			want: "outer: inner error",
+		},
+		{
+			name: "multiline error from vagrant",
+			err:  fmt.Errorf("VirtualBox not found\nInstall from https://virtualbox.org\nVersion 7.0+ required"),
+			want: "VirtualBox not found",
+		},
+		{
+			name: "error with leading newline",
+			err:  fmt.Errorf("\nerror after newline"),
+			want: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractErrorMessage(tt.err)
+			if got != tt.want {
+				t.Errorf("extractErrorMessage() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestApplyVagrantWrapper_ErrorHandling tests error handling in applyVagrantWrapper.
+func TestApplyVagrantWrapper_ErrorHandling(t *testing.T) {
+	t.Run("preflight check failure sets ErrorMessage and StatusError", func(t *testing.T) {
+		mock := &mockVagrantVM{
+			status:       "not_created",
+			sessionCount: 0,
+		}
+
+		preflightErr := fmt.Errorf("disk space too low: 500MB available\nrequired: 10GB")
+		mock.PreflightCheckFn = func() error {
+			return preflightErr
+		}
+
+		inst := NewInstance("test-preflight", "/tmp/test")
+		inst.vagrantProvider = mock
+
+		_, err := inst.applyVagrantWrapper("claude")
+		if err == nil {
+			t.Fatal("expected error when PreflightCheck fails")
+		}
+
+		// ErrorMessage should contain first line only
+		expectedMsg := "disk space too low: 500MB available"
+		if inst.ErrorMessage != expectedMsg {
+			t.Errorf("ErrorMessage = %q, want %q", inst.ErrorMessage, expectedMsg)
+		}
+
+		// Status should be error
+		if inst.Status != StatusError {
+			t.Errorf("Status = %q, want %q", inst.Status, StatusError)
+		}
+	})
+
+	t.Run("boot failure sets ErrorMessage and StatusError", func(t *testing.T) {
+		mock := &mockVagrantVM{
+			status:       "not_created",
+			sessionCount: 0,
+		}
+
+		bootErr := fmt.Errorf("failed to start VM\nVirtualBox error: VERR_VMX_NO_VMX")
+		mock.BootFn = func() error {
+			return bootErr
+		}
+
+		inst := NewInstance("test-boot", "/tmp/test")
+		inst.vagrantProvider = mock
+
+		_, err := inst.applyVagrantWrapper("claude")
+		if err == nil {
+			t.Fatal("expected error when Boot fails")
+		}
+
+		// ErrorMessage should be set to first line
+		expectedMsg := "failed to start VM"
+		if inst.ErrorMessage != expectedMsg {
+			t.Errorf("ErrorMessage = %q, want %q", inst.ErrorMessage, expectedMsg)
+		}
+
+		if inst.Status != StatusError {
+			t.Errorf("Status = %q, want %q", inst.Status, StatusError)
+		}
+	})
+}
+
+// TestStopVagrant_AsyncBehavior tests the async goroutine behavior of stopVagrant.
+func TestStopVagrant_AsyncBehavior(t *testing.T) {
+	t.Run("suspends VM when AutoSuspend enabled and last session", func(t *testing.T) {
+		suspendCalled := false
+		mock := &mockVagrantVM{
+			status:       "running",
+			sessionCount: 1, // This is the last session
+		}
+
+		// Track Suspend call
+		mock.SuspendFn = func() error {
+			suspendCalled = true
+			return nil
+		}
+
+		inst := NewInstance("test-stop-suspend", "/tmp/test")
+		inst.vagrantProvider = mock
+
+		// Enable AutoSuspend
+		autoSuspend := true
+		userConfigCacheMu.Lock()
+		userConfigCache = &UserConfig{
+			Vagrant: VagrantSettings{
+				AutoSuspend: &autoSuspend,
+			},
+		}
+		userConfigCacheMu.Unlock()
+		defer func() {
+			userConfigCacheMu.Lock()
+			userConfigCache = nil
+			userConfigCacheMu.Unlock()
+		}()
+
+		// Call stopVagrant (async)
+		inst.stopVagrant()
+
+		// Wait for goroutine to complete
+		select {
+		case <-inst.vmOpDone:
+			// Success
+		case <-time.After(1 * time.Second):
+			t.Fatal("stopVagrant goroutine did not complete")
+		}
+
+		if !suspendCalled {
+			t.Error("Suspend should be called when AutoSuspend enabled and last session")
+		}
+
+		if !inst.cleanShutdown.Load() {
+			t.Error("cleanShutdown should be true after successful suspend")
+		}
+
+		if inst.vmOpInFlight.Load() {
+			t.Error("vmOpInFlight should be false after goroutine completes")
+		}
+	})
+
+	t.Run("does not suspend when not last session", func(t *testing.T) {
+		suspendCalled := false
+		unregisterCalled := false
+
+		mock := &mockVagrantVM{
+			status:       "running",
+			sessionCount: 2, // Not last session
+		}
+
+		mock.SuspendFn = func() error {
+			suspendCalled = true
+			return nil
+		}
+
+		mock.UnregisterFn = func(id string) {
+			unregisterCalled = true
+		}
+
+		inst := NewInstance("test-stop-shared", "/tmp/test")
+		inst.vagrantProvider = mock
+
+		autoSuspend := true
+		userConfigCacheMu.Lock()
+		userConfigCache = &UserConfig{
+			Vagrant: VagrantSettings{
+				AutoSuspend: &autoSuspend,
+			},
+		}
+		userConfigCacheMu.Unlock()
+		defer func() {
+			userConfigCacheMu.Lock()
+			userConfigCache = nil
+			userConfigCacheMu.Unlock()
+		}()
+
+		inst.stopVagrant()
+
+		select {
+		case <-inst.vmOpDone:
+			// Success
+		case <-time.After(1 * time.Second):
+			t.Fatal("stopVagrant goroutine did not complete")
+		}
+
+		if suspendCalled {
+			t.Error("Suspend should NOT be called when not last session")
+		}
+
+		if !unregisterCalled {
+			t.Error("UnregisterSession should be called")
+		}
+	})
+
+	t.Run("does nothing when AutoSuspend disabled", func(t *testing.T) {
+		suspendCalled := false
+		mock := &mockVagrantVM{
+			status:       "running",
+			sessionCount: 1,
+		}
+
+		mock.SuspendFn = func() error {
+			suspendCalled = true
+			return nil
+		}
+
+		inst := NewInstance("test-stop-nosuspend", "/tmp/test")
+		inst.vagrantProvider = mock
+
+		// Disable AutoSuspend
+		autoSuspend := false
+		userConfigCacheMu.Lock()
+		userConfigCache = &UserConfig{
+			Vagrant: VagrantSettings{
+				AutoSuspend: &autoSuspend,
+			},
+		}
+		userConfigCacheMu.Unlock()
+		defer func() {
+			userConfigCacheMu.Lock()
+			userConfigCache = nil
+			userConfigCacheMu.Unlock()
+		}()
+
+		inst.stopVagrant()
+
+		select {
+		case <-inst.vmOpDone:
+			// Success
+		case <-time.After(1 * time.Second):
+			t.Fatal("stopVagrant goroutine did not complete")
+		}
+
+		if suspendCalled {
+			t.Error("Suspend should NOT be called when AutoSuspend disabled")
+		}
+	})
+}
+
+// TestDestroyVagrant_AsyncBehavior tests the async goroutine behavior of destroyVagrant.
+func TestDestroyVagrant_AsyncBehavior(t *testing.T) {
+	t.Run("destroys VM when AutoDestroy enabled and last session", func(t *testing.T) {
+		destroyCalled := false
+		mock := &mockVagrantVM{
+			status:       "running",
+			sessionCount: 1,
+		}
+
+		mock.DestroyFn = func() error {
+			destroyCalled = true
+			return nil
+		}
+
+		inst := NewInstance("test-destroy-auto", "/tmp/test")
+		inst.vagrantProvider = mock
+
+		// Enable AutoDestroy
+		userConfigCacheMu.Lock()
+		userConfigCache = &UserConfig{
+			Vagrant: VagrantSettings{
+				AutoDestroy: true,
+			},
+		}
+		userConfigCacheMu.Unlock()
+		defer func() {
+			userConfigCacheMu.Lock()
+			userConfigCache = nil
+			userConfigCacheMu.Unlock()
+		}()
+
+		inst.destroyVagrant()
+
+		select {
+		case <-inst.vmOpDone:
+			// Success
+		case <-time.After(1 * time.Second):
+			t.Fatal("destroyVagrant goroutine did not complete")
+		}
+
+		if !destroyCalled {
+			t.Error("Destroy should be called when AutoDestroy enabled and last session")
+		}
+
+		if inst.vmOpInFlight.Load() {
+			t.Error("vmOpInFlight should be false after goroutine completes")
+		}
+	})
+
+	t.Run("does not destroy when not last session", func(t *testing.T) {
+		destroyCalled := false
+		unregisterCalled := false
+
+		mock := &mockVagrantVM{
+			status:       "running",
+			sessionCount: 2, // Not last session
+		}
+
+		mock.DestroyFn = func() error {
+			destroyCalled = true
+			return nil
+		}
+
+		mock.UnregisterFn = func(id string) {
+			unregisterCalled = true
+		}
+
+		inst := NewInstance("test-destroy-shared", "/tmp/test")
+		inst.vagrantProvider = mock
+
+		userConfigCacheMu.Lock()
+		userConfigCache = &UserConfig{
+			Vagrant: VagrantSettings{
+				AutoDestroy: true,
+			},
+		}
+		userConfigCacheMu.Unlock()
+		defer func() {
+			userConfigCacheMu.Lock()
+			userConfigCache = nil
+			userConfigCacheMu.Unlock()
+		}()
+
+		inst.destroyVagrant()
+
+		select {
+		case <-inst.vmOpDone:
+			// Success
+		case <-time.After(1 * time.Second):
+			t.Fatal("destroyVagrant goroutine did not complete")
+		}
+
+		if destroyCalled {
+			t.Error("Destroy should NOT be called when not last session")
+		}
+
+		if !unregisterCalled {
+			t.Error("UnregisterSession should be called")
+		}
+	})
+
+	t.Run("only unregisters when AutoDestroy disabled", func(t *testing.T) {
+		destroyCalled := false
+		unregisterCalled := false
+
+		mock := &mockVagrantVM{
+			status:       "running",
+			sessionCount: 1,
+		}
+
+		mock.DestroyFn = func() error {
+			destroyCalled = true
+			return nil
+		}
+
+		mock.UnregisterFn = func(id string) {
+			unregisterCalled = true
+		}
+
+		inst := NewInstance("test-destroy-disabled", "/tmp/test")
+		inst.vagrantProvider = mock
+
+		// Disable AutoDestroy
+		userConfigCacheMu.Lock()
+		userConfigCache = &UserConfig{
+			Vagrant: VagrantSettings{
+				AutoDestroy: false,
+			},
+		}
+		userConfigCacheMu.Unlock()
+		defer func() {
+			userConfigCacheMu.Lock()
+			userConfigCache = nil
+			userConfigCacheMu.Unlock()
+		}()
+
+		inst.destroyVagrant()
+
+		select {
+		case <-inst.vmOpDone:
+			// Success
+		case <-time.After(1 * time.Second):
+			t.Fatal("destroyVagrant goroutine did not complete")
+		}
+
+		if destroyCalled {
+			t.Error("Destroy should NOT be called when AutoDestroy disabled")
+		}
+
+		if !unregisterCalled {
+			t.Error("UnregisterSession should still be called")
+		}
+	})
 }
