@@ -3,7 +3,9 @@ package vagrant
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"strings"
@@ -20,6 +22,7 @@ type Manager struct {
 	dotfilePath        string                 // for VAGRANT_DOTFILE_PATH (multi-session isolation)
 	sessions           []string               // session IDs sharing this VM
 	cache              *healthCache           // health check cache (defined in health.go)
+	cacheOnce          sync.Once              // ensures cache is initialized exactly once (thread-safe)
 	mu                 sync.Mutex
 	writeFileToVMFunc  writeFileToVMFuncType  // injectable for testing (defined in sync.go)
 }
@@ -41,13 +44,39 @@ func NewManager(projectPath string, settings session.VagrantSettings) *Manager {
 
 // vagrantCmd creates an exec.Cmd for running vagrant with the given arguments.
 // Sets the working directory to projectPath and adds VAGRANT_DOTFILE_PATH env if set.
+// Thread-safe read of dotfilePath.
 func (m *Manager) vagrantCmd(args ...string) *exec.Cmd {
 	cmd := exec.Command("vagrant", args...)
 	cmd.Dir = m.projectPath
 
-	if m.dotfilePath != "" {
+	// Capture dotfilePath under lock, then use local variable
+	m.mu.Lock()
+	dotfilePath := m.dotfilePath
+	m.mu.Unlock()
+
+	if dotfilePath != "" {
 		// Propagate current environment and add VAGRANT_DOTFILE_PATH
-		cmd.Env = append(os.Environ(), "VAGRANT_DOTFILE_PATH="+m.dotfilePath)
+		cmd.Env = append(os.Environ(), "VAGRANT_DOTFILE_PATH="+dotfilePath)
+	}
+
+	return cmd
+}
+
+// vagrantCmdContext creates an exec.Cmd for running vagrant with the given arguments and context.
+// Sets the working directory to projectPath and adds VAGRANT_DOTFILE_PATH env if set.
+// Thread-safe read of dotfilePath. The context controls command cancellation/timeout.
+func (m *Manager) vagrantCmdContext(ctx context.Context, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, "vagrant", args...)
+	cmd.Dir = m.projectPath
+
+	// Capture dotfilePath under lock, then use local variable
+	m.mu.Lock()
+	dotfilePath := m.dotfilePath
+	m.mu.Unlock()
+
+	if dotfilePath != "" {
+		// Propagate current environment and add VAGRANT_DOTFILE_PATH
+		cmd.Env = append(os.Environ(), "VAGRANT_DOTFILE_PATH="+dotfilePath)
 	}
 
 	return cmd
@@ -87,11 +116,20 @@ func (m *Manager) Status() (string, error) {
 func (m *Manager) EnsureRunning(onPhase func(BootPhase)) error {
 	cmd := m.vagrantCmd("up", "--machine-readable")
 
-	// Capture both stdout and stderr for error handling
+	// Simple path: no phase callback needed, avoid pipe deadlock
+	if onPhase == nil {
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			return wrapVagrantUpError(err, string(output))
+		}
+		return nil
+	}
+
+	// Capture stderr for error handling (needed for Apple Silicon kext detection)
 	var stderrBuf bytes.Buffer
 	cmd.Stderr = &stderrBuf
 
-	// Stream stdout to parse boot phases
+	// Full path: pipe + scanner + phase parsing
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return fmt.Errorf("failed to create stdout pipe: %w", err)
@@ -102,15 +140,16 @@ func (m *Manager) EnsureRunning(onPhase func(BootPhase)) error {
 	}
 
 	// Parse output line by line for boot phases
-	if onPhase != nil {
-		scanner := bufio.NewScanner(stdout)
-		for scanner.Scan() {
-			line := scanner.Text()
-			// Use ParseBootPhase from bootphase.go
-			if phase, ok := ParseBootPhase(line); ok {
-				onPhase(phase)
-			}
+	scanner := bufio.NewScanner(stdout)
+	for scanner.Scan() {
+		line := scanner.Text()
+		// Use ParseBootPhase from bootphase.go
+		if phase, ok := ParseBootPhase(line); ok {
+			onPhase(phase)
 		}
+	}
+	if scanErr := scanner.Err(); scanErr != nil {
+		slog.Warn("vagrant_boot_scanner_error", slog.String("error", scanErr.Error()))
 	}
 
 	if err := cmd.Wait(); err != nil {

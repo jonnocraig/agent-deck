@@ -131,13 +131,15 @@ func TestVagrantVMAdapter_InterfaceCompliance(t *testing.T) {
 // TestVagrantVMAdapter_AllMethodsDelegate verifies that all adapter methods
 // correctly delegate to the underlying Manager.
 func TestVagrantVMAdapter_AllMethodsDelegate(t *testing.T) {
-	projectPath := "/test/project"
+	projectPath := t.TempDir()
 	settings := session.VagrantSettings{}
 	vm := newVagrantVM(projectPath, settings)
 	adapter := vm.(*vagrantVMAdapter)
 
 	// Test session management delegation
-	adapter.RegisterSession("session-1")
+	if err := adapter.RegisterSession("session-1"); err != nil {
+		t.Fatalf("RegisterSession failed: %v", err)
+	}
 	if count := adapter.SessionCount(); count != 1 {
 		t.Errorf("SessionCount() = %d, want 1", count)
 	}
@@ -146,12 +148,16 @@ func TestVagrantVMAdapter_AllMethodsDelegate(t *testing.T) {
 		t.Error("IsLastSession should return true for only session")
 	}
 
-	adapter.RegisterSession("session-2")
+	if err := adapter.RegisterSession("session-2"); err != nil {
+		t.Fatalf("RegisterSession failed: %v", err)
+	}
 	if count := adapter.SessionCount(); count != 2 {
 		t.Errorf("SessionCount() = %d, want 2", count)
 	}
 
-	adapter.UnregisterSession("session-1")
+	if err := adapter.UnregisterSession("session-1"); err != nil {
+		t.Fatalf("UnregisterSession failed: %v", err)
+	}
 	if count := adapter.SessionCount(); count != 1 {
 		t.Errorf("SessionCount() = %d after unregister, want 1", count)
 	}
@@ -178,7 +184,8 @@ func TestVagrantVMAdapter_AllMethodsDelegate(t *testing.T) {
 // TestVagrantProviderFactory_Registration verifies that the factory is registered
 // in the init function for use by the session package.
 func TestVagrantProviderFactory_Registration(t *testing.T) {
-	if session.VagrantProviderFactory == nil {
+	factory := session.GetVagrantProviderFactory()
+	if factory == nil {
 		t.Fatal("VagrantProviderFactory should be set by init()")
 	}
 
@@ -189,7 +196,7 @@ func TestVagrantProviderFactory_Registration(t *testing.T) {
 		CPUs:     1,
 	}
 
-	vm := session.VagrantProviderFactory(projectPath, settings)
+	vm := factory(projectPath, settings)
 	if vm == nil {
 		t.Fatal("VagrantProviderFactory returned nil")
 	}

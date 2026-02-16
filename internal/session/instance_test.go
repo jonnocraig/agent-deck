@@ -2230,11 +2230,15 @@ func (m *mockVagrantVM) CollectEnvVarNames(_ []string, _ map[string]string) []st
 func (m *mockVagrantVM) CollectTunnelPorts(_ []string) []int                         { return nil }
 func (m *mockVagrantVM) HasConfigDrift() bool                                        { return false }
 func (m *mockVagrantVM) WriteConfigHash() error                                      { return nil }
-func (m *mockVagrantVM) RegisterSession(id string) { m.registerCalls = append(m.registerCalls, id) }
-func (m *mockVagrantVM) UnregisterSession(id string) {
+func (m *mockVagrantVM) RegisterSession(id string) error {
+	m.registerCalls = append(m.registerCalls, id)
+	return nil
+}
+func (m *mockVagrantVM) UnregisterSession(id string) error {
 	if m.UnregisterFn != nil {
 		m.UnregisterFn(id)
 	}
+	return nil
 }
 func (m *mockVagrantVM) SessionCount() int                                 { return m.sessionCount }
 func (m *mockVagrantVM) IsLastSession(_ string) bool                       { return m.sessionCount <= 1 }
@@ -2659,7 +2663,7 @@ func TestStopVagrant_AsyncBehavior(t *testing.T) {
 			t.Error("Suspend should be called when AutoSuspend enabled and last session")
 		}
 
-		if inst.cleanShutdown != true {
+		if !inst.cleanShutdown.Load() {
 			t.Error("cleanShutdown should be true after successful suspend")
 		}
 

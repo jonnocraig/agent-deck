@@ -194,14 +194,19 @@ func TestHealthCheckCacheTTL(t *testing.T) {
 	}
 
 	// Cache should be valid
-	if !m.cache.isValid() {
+	cached, valid := m.cache.getIfValid()
+	if !valid {
 		t.Error("Cache should be valid within TTL")
+	}
+	if cached.State != "running" {
+		t.Errorf("Cached state = %q, want %q", cached.State, "running")
 	}
 
 	// Expire the cache
 	m.cache.lastCheck = time.Now().Add(-31 * time.Second)
 
-	if m.cache.isValid() {
+	_, valid = m.cache.getIfValid()
+	if valid {
 		t.Error("Cache should be invalid after TTL")
 	}
 }
@@ -229,13 +234,13 @@ func TestHealthCache_GetAndSet(t *testing.T) {
 		ttl: 30 * time.Second,
 	}
 
-	// Test get on empty cache
-	initialResult := cache.get()
-	if initialResult.State != "" {
-		t.Errorf("empty cache get() should return zero value, got State=%q", initialResult.State)
+	// Test getIfValid on empty cache - should be invalid
+	_, valid := cache.getIfValid()
+	if valid {
+		t.Error("empty cache getIfValid() should return invalid")
 	}
 
-	// Test set and get
+	// Test set and getIfValid
 	testHealth := VMHealth{
 		State:      "running",
 		Healthy:    true,
@@ -245,19 +250,22 @@ func TestHealthCache_GetAndSet(t *testing.T) {
 
 	cache.set(testHealth)
 
-	// Verify get returns the stored result
-	retrieved := cache.get()
+	// Verify getIfValid returns the stored result
+	retrieved, valid := cache.getIfValid()
+	if !valid {
+		t.Error("getIfValid() should return valid after set()")
+	}
 	if retrieved.State != testHealth.State {
-		t.Errorf("get() State = %q, want %q", retrieved.State, testHealth.State)
+		t.Errorf("getIfValid() State = %q, want %q", retrieved.State, testHealth.State)
 	}
 	if retrieved.Healthy != testHealth.Healthy {
-		t.Errorf("get() Healthy = %v, want %v", retrieved.Healthy, testHealth.Healthy)
+		t.Errorf("getIfValid() Healthy = %v, want %v", retrieved.Healthy, testHealth.Healthy)
 	}
 	if retrieved.Responsive != testHealth.Responsive {
-		t.Errorf("get() Responsive = %v, want %v", retrieved.Responsive, testHealth.Responsive)
+		t.Errorf("getIfValid() Responsive = %v, want %v", retrieved.Responsive, testHealth.Responsive)
 	}
 	if retrieved.Message != testHealth.Message {
-		t.Errorf("get() Message = %q, want %q", retrieved.Message, testHealth.Message)
+		t.Errorf("getIfValid() Message = %q, want %q", retrieved.Message, testHealth.Message)
 	}
 
 	// Verify lastCheck was updated
@@ -282,9 +290,12 @@ func TestHealthCache_GetAndSet(t *testing.T) {
 	}
 
 	// Verify updated values
-	retrieved = cache.get()
+	retrieved, valid = cache.getIfValid()
+	if !valid {
+		t.Error("getIfValid() should return valid after second set()")
+	}
 	if retrieved.State != "saved" {
-		t.Errorf("get() after update should return new State, got %q", retrieved.State)
+		t.Errorf("getIfValid() after update should return new State, got %q", retrieved.State)
 	}
 }
 

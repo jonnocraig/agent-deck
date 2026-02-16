@@ -1,5 +1,9 @@
 package session
 
+import (
+	"sync/atomic"
+)
+
 // VagrantVM defines the interface for Vagrant VM lifecycle operations
 // needed by Instance. This is defined in the session package to avoid
 // an import cycle (vagrant imports session for types).
@@ -24,8 +28,8 @@ type VagrantVM interface {
 	CollectTunnelPorts(enabledNames []string) []int
 	HasConfigDrift() bool
 	WriteConfigHash() error
-	RegisterSession(sessionID string)
-	UnregisterSession(sessionID string)
+	RegisterSession(sessionID string) error
+	UnregisterSession(sessionID string) error
 	SessionCount() int
 	IsLastSession(sessionID string) bool
 	SetDotfilePath(sessionID string)
@@ -42,6 +46,24 @@ type VMHealthResult struct {
 	Message    string
 }
 
-// VagrantProviderFactory creates a VagrantVM for the given project path and settings.
-// Set by the vagrant package at init time to break the import cycle.
-var VagrantProviderFactory func(projectPath string, settings VagrantSettings) VagrantVM
+// vagrantProviderFactoryValue holds the factory function in an atomic.Value
+// for thread-safe access during parallel tests.
+var vagrantProviderFactoryValue atomic.Value
+
+// SetVagrantProviderFactory sets the factory function. Called by vagrant package init().
+func SetVagrantProviderFactory(fn func(projectPath string, settings VagrantSettings) VagrantVM) {
+	vagrantProviderFactoryValue.Store(fn)
+}
+
+// GetVagrantProviderFactory returns the registered factory function, or nil if not set.
+func GetVagrantProviderFactory() func(projectPath string, settings VagrantSettings) VagrantVM {
+	v := vagrantProviderFactoryValue.Load()
+	if v == nil {
+		return nil
+	}
+	fn, ok := v.(func(projectPath string, settings VagrantSettings) VagrantVM)
+	if !ok {
+		return nil
+	}
+	return fn
+}

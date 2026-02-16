@@ -1,47 +1,58 @@
-# Session Handoff - 2026-02-16 (Session 10)
+# Session Handoff - 2026-02-16 (Session 11)
 
 ## What Was Accomplished
 
-- Installed `gopls-lsp` Claude Code plugin from marketplace
-- Installed `gopls v0.21.1` binary via `go install golang.org/x/tools/gopls@latest`
-- Verified gopls functionality: diagnostics, symbols, definitions, references all working
-- Added "Go Tooling" section to CLAUDE.md
-- Added gopls-lsp reference to vagrant mode agent plan
+- Executed Waves 7-8 bug fixes using agentic-ai-implement skill with parallel agent teams
+- Fixed 4 critical race conditions (Wave 7): vmOpDone channel, cleanShutdown, healthCache TOCTOU, SetDotfilePath
+- Fixed 6 high-priority bugs (Wave 8): EnsureRunning deadlock, writeLockfile errors, initCache thread safety, VagrantProviderFactory, DestroySuspendedVMs cleanup, health checks vagrantCmd bypass
+- Ran code review gate, found 2 HIGH + 5 MEDIUM + 5 LOW issues
+- Fixed 4 code review issues: channel reset race, scanner.Err(), selectedCount bug, cleanShutdown reset on restart
+- All 14 packages pass with `-race` flag enabled
 
 ## Current State
 
 - Branch: `feature/vagrant`
-- Status: 77% complete (34/44 tasks, Waves 1-6 done, Waves 7-8 pending)
-- All quality gates passing: build, vet, all tests green
-- Uncommitted changes: CLAUDE.md + agent plan (gopls docs)
+- Status: **100% complete** (44/44 tasks, all 8 waves done)
+- All quality gates passing: build, vet, all tests green with race detector
+- Uncommitted changes: Wave 7-8 bug fixes + code review fixes + TO-DOS/SESSION-HANDOFF updates
 
-## Uncommitted Changes
+## Files Modified in This Session
 
-```
-M .claude/plans/agent-teams/2026-02-14-vagrant-mode-agent-plan.md
-M CLAUDE.md
-```
+### Wave 7 (race conditions)
+- `internal/session/instance.go` — vmOpDone mutex protection, cleanShutdown → atomic.Bool
+- `internal/vagrant/health.go` — getIfValid() combined method replacing isValid()+get()
+- `internal/vagrant/sessions.go` — SetDotfilePath mutex protection
+- `internal/vagrant/manager.go` — vagrantCmd dotfilePath read under mutex
 
-## New Tools Available
+### Wave 8 (high-priority bugs)
+- `internal/vagrant/manager.go` — EnsureRunning nil-safe CombinedOutput path, cacheOnce field, vagrantCmdContext helper
+- `internal/vagrant/sessions.go` — writeLockfile returns error, propagated to callers
+- `internal/vagrant/health.go` — initCache uses sync.Once, health checks use vagrantCmd/vagrantCmdContext
+- `internal/session/vagrant_iface.go` — VagrantProviderFactory → atomic.Value with getter/setter, RegisterSession/UnregisterSession return error
+- `internal/vagrant/bridge.go` — SetVagrantProviderFactory usage, error propagation
+- `internal/ui/cleanup_dialog.go` — Vagrantfile check, skip cleanup on destroy failure, selectedCount fix
 
-- `gopls-lsp` plugin installed (Claude Code marketplace)
-- `gopls v0.21.1` at `/Users/jon_ec/go/bin/bin/gopls`
-- Available commands: `gopls check`, `gopls symbols`, `gopls definition`, `gopls references`
-- `golang-pro` subagent at `~/.claude/agents/golang-pro.md`
+### Code review fixes
+- `internal/session/instance.go` — waitForVagrantOp nils channel instead of recreating, cleanShutdown.Store(false) in restartVagrantSession
+- `internal/vagrant/manager.go` — moved stderrBuf setup after nil check, added scanner.Err() logging
 
-## Next Steps (in order)
+### Tests updated
+- `internal/vagrant/health_test.go` — getIfValid() API
+- `internal/session/instance_test.go` — cleanShutdown atomic.Bool
+- `internal/vagrant/bridge_test.go` — GetVagrantProviderFactory(), t.TempDir()
+- `internal/vagrant/sessions_test.go` — error returns
 
-1. Run `/catchup` to restore context
-2. Commit gopls documentation changes
-3. Launch Wave 7 (Critical Bug Fixes) — 4 race condition tasks, can run in parallel
-4. Run quality gates after Wave 7
-5. Launch Wave 8 (High Priority Fixes) — 6 tasks
-6. Run `go test -race ./...` to verify race conditions are fixed
-7. Final commit, push, and PR
+## Next Steps
+
+1. Commit all Wave 7-8 changes
+2. Push to origin
+3. Create PR to `main` using `superpowers:finishing-a-development-branch`
+4. Address any remaining MEDIUM code review items as follow-up (file size, magic numbers, DRY)
 
 ## Architecture Reminders
 
-- **gopls-lsp**: Use `gopls check <file>` to validate Go changes, `gopls references <file>:<line>:<col>` to find usages
-- **Bridge adapter pattern**: `session/vagrant_iface.go` defines interface, `vagrant/bridge.go` implements. Never import vagrant from session.
-- **Manager split**: 9 concern-separated files. `manager.go` has struct + constructor + core lifecycle only.
-- **Concurrency**: Instance uses `sync.RWMutex` + getter/setters, `vmOpInFlight atomic.Bool` for VM ops.
+- **VagrantProviderFactory**: Now uses `atomic.Value` — access via `GetVagrantProviderFactory()` / `SetVagrantProviderFactory()`
+- **RegisterSession/UnregisterSession**: Now return `error` — callers log warnings but don't fail
+- **healthCache**: Uses `getIfValid()` instead of separate `isValid()` + `get()`
+- **initCache**: Uses `sync.Once` via `m.cacheOnce` field on Manager
+- **vagrantCmdContext**: New context-aware variant of `vagrantCmd()` for timeout support

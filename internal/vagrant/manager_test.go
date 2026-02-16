@@ -289,7 +289,9 @@ func TestManagerStubMethods(t *testing.T) {
 	}
 
 	// Test session management methods (should not panic)
-	manager.RegisterSession("session-1")
+	if err := manager.RegisterSession("session-1"); err != nil {
+		t.Fatalf("RegisterSession failed: %v", err)
+	}
 	if count := manager.SessionCount(); count != 1 {
 		t.Errorf("SessionCount should return 1 after registering a session, got %d", count)
 	}
@@ -298,7 +300,9 @@ func TestManagerStubMethods(t *testing.T) {
 		t.Errorf("IsLastSession should return true when only one session exists, got %v", last)
 	}
 
-	manager.RegisterSession("session-2")
+	if err := manager.RegisterSession("session-2"); err != nil {
+		t.Fatalf("RegisterSession failed: %v", err)
+	}
 	if count := manager.SessionCount(); count != 2 {
 		t.Errorf("SessionCount should return 2 after registering two sessions, got %d", count)
 	}
@@ -307,7 +311,9 @@ func TestManagerStubMethods(t *testing.T) {
 		t.Errorf("IsLastSession should return false when multiple sessions exist, got %v", last)
 	}
 
-	manager.UnregisterSession("session-1")
+	if err := manager.UnregisterSession("session-1"); err != nil {
+		t.Fatalf("UnregisterSession failed: %v", err)
+	}
 	if count := manager.SessionCount(); count != 1 {
 		t.Errorf("SessionCount should return 1 after unregistering one session, got %d", count)
 	}

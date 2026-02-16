@@ -16,7 +16,9 @@ func TestRegisterSession(t *testing.T) {
 		sessions:    []string{},
 	}
 
-	m.RegisterSession("session-1")
+	if err := m.RegisterSession("session-1"); err != nil {
+		t.Fatalf("RegisterSession failed: %v", err)
+	}
 
 	if len(m.sessions) != 1 {
 		t.Errorf("expected 1 session, got %d", len(m.sessions))
@@ -35,8 +37,12 @@ func TestRegisterSessionDuplicate(t *testing.T) {
 		sessions:    []string{},
 	}
 
-	m.RegisterSession("session-1")
-	m.RegisterSession("session-1")
+	if err := m.RegisterSession("session-1"); err != nil {
+		t.Fatalf("RegisterSession failed: %v", err)
+	}
+	if err := m.RegisterSession("session-1"); err != nil {
+		t.Fatalf("RegisterSession duplicate failed: %v", err)
+	}
 
 	if len(m.sessions) != 1 {
 		t.Errorf("expected 1 session after duplicate add, got %d", len(m.sessions))
@@ -51,7 +57,9 @@ func TestUnregisterSession(t *testing.T) {
 		sessions:    []string{"session-1", "session-2"},
 	}
 
-	m.UnregisterSession("session-1")
+	if err := m.UnregisterSession("session-1"); err != nil {
+		t.Fatalf("UnregisterSession failed: %v", err)
+	}
 
 	if len(m.sessions) != 1 {
 		t.Errorf("expected 1 session after unregister, got %d", len(m.sessions))
@@ -70,7 +78,9 @@ func TestUnregisterSessionNotFound(t *testing.T) {
 		sessions:    []string{"session-1"},
 	}
 
-	m.UnregisterSession("session-999")
+	if err := m.UnregisterSession("session-999"); err != nil {
+		t.Fatalf("UnregisterSession failed: %v", err)
+	}
 
 	if len(m.sessions) != 1 {
 		t.Errorf("expected 1 session after no-op unregister, got %d", len(m.sessions))
@@ -93,8 +103,12 @@ func TestSessionCount(t *testing.T) {
 		t.Errorf("expected 0 sessions, got %d", m.SessionCount())
 	}
 
-	m.RegisterSession("session-1")
-	m.RegisterSession("session-2")
+	if err := m.RegisterSession("session-1"); err != nil {
+		t.Fatalf("RegisterSession failed: %v", err)
+	}
+	if err := m.RegisterSession("session-2"); err != nil {
+		t.Fatalf("RegisterSession failed: %v", err)
+	}
 
 	if m.SessionCount() != 2 {
 		t.Errorf("expected 2 sessions, got %d", m.SessionCount())
@@ -156,7 +170,9 @@ func TestWriteAndLoadLockfile(t *testing.T) {
 	}
 
 	// Write lockfile
-	m.writeLockfile()
+	if err := m.writeLockfile(); err != nil {
+		t.Fatalf("writeLockfile failed: %v", err)
+	}
 
 	// Verify file exists
 	lockPath := filepath.Join(tmpDir, ".vagrant", "agent-deck.lock")
@@ -211,7 +227,9 @@ func TestConcurrentSessionAccess(t *testing.T) {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
-			m.RegisterSession("session-" + string(rune('0'+id)))
+			if err := m.RegisterSession("session-" + string(rune('0'+id))); err != nil {
+				t.Errorf("RegisterSession failed: %v", err)
+			}
 		}(i)
 	}
 
@@ -228,7 +246,9 @@ func TestConcurrentSessionAccess(t *testing.T) {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
-			m.UnregisterSession("session-" + string(rune('0'+id)))
+			if err := m.UnregisterSession("session-" + string(rune('0'+id))); err != nil {
+				t.Errorf("UnregisterSession failed: %v", err)
+			}
 		}(i)
 	}
 

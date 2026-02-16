@@ -5,7 +5,7 @@ import (
 )
 
 func init() {
-	session.VagrantProviderFactory = newVagrantVM
+	session.SetVagrantProviderFactory(newVagrantVM)
 }
 
 // vagrantVMAdapter wraps a Manager to satisfy session.vagrantVM interface.
@@ -34,8 +34,8 @@ func (a *vagrantVMAdapter) Status() (string, error)           { return a.mgr.Sta
 func (a *vagrantVMAdapter) SyncClaudeConfig() error           { return a.mgr.SyncClaudeConfig() }
 func (a *vagrantVMAdapter) HasConfigDrift() bool              { return a.mgr.HasConfigDrift() }
 func (a *vagrantVMAdapter) WriteConfigHash() error            { return a.mgr.WriteConfigHash() }
-func (a *vagrantVMAdapter) RegisterSession(id string)         { a.mgr.RegisterSession(id) }
-func (a *vagrantVMAdapter) UnregisterSession(id string)       { a.mgr.UnregisterSession(id) }
+func (a *vagrantVMAdapter) RegisterSession(id string) error   { return a.mgr.RegisterSession(id) }
+func (a *vagrantVMAdapter) UnregisterSession(id string) error { return a.mgr.UnregisterSession(id) }
 func (a *vagrantVMAdapter) SessionCount() int                 { return a.mgr.SessionCount() }
 func (a *vagrantVMAdapter) IsLastSession(id string) bool      { return a.mgr.IsLastSession(id) }
 func (a *vagrantVMAdapter) SetDotfilePath(id string)           { a.mgr.SetDotfilePath(id) }

@@ -113,10 +113,12 @@ type VagrantProvider interface {
 	WriteConfigHash() error
 
 	// RegisterSession registers a new Claude Code session using the VM
-	RegisterSession(sessionID string)
+	// Returns error if lockfile write fails.
+	RegisterSession(sessionID string) error
 
 	// UnregisterSession removes a session registration
-	UnregisterSession(sessionID string)
+	// Returns error if lockfile write fails.
+	UnregisterSession(sessionID string) error
 
 	// SessionCount returns the number of active sessions using the VM
 	SessionCount() int

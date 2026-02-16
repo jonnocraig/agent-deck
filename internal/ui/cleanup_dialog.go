@@ -249,8 +249,10 @@ func (d *CleanupDialog) View() string {
 
 		b.WriteString("\n")
 		selectedCount := 0
-		for range d.selected {
-			selectedCount++
+		for _, isSelected := range d.selected {
+			if isSelected {
+				selectedCount++
+			}
 		}
 		if selectedCount > 0 {
 			b.WriteString(footerStyle.Render(fmt.Sprintf("[Space] Toggle  [A] All  [Enter] Destroy (%d)  [Esc] Cancel", selectedCount)))
@@ -339,18 +341,30 @@ func DestroySuspendedVMs(vms []StaleVM) []error {
 	var errs []error
 
 	for _, vm := range vms {
+		// Verify Vagrantfile exists to prevent path traversal and ensure valid Vagrant project
+		vagrantfile := filepath.Join(vm.ProjectPath, "Vagrantfile")
+		if _, err := os.Stat(vagrantfile); err != nil {
+			errs = append(errs, fmt.Errorf("skipping %s: Vagrantfile not found", vm.ProjectPath))
+			continue
+		}
+
 		// cd to VM's project directory and run vagrant destroy -f
 		cmd := exec.Command("vagrant", "destroy", "-f")
 		cmd.Dir = vm.ProjectPath
 
 		if err := cmd.Run(); err != nil {
+			// If destroy fails, leave .vagrant directory intact so user can retry
 			errs = append(errs, fmt.Errorf("failed to destroy VM at %s: %w", vm.ProjectPath, err))
+			continue
 		}
 
-		// Also clean up .vagrant directory if it exists
+		// Only clean up .vagrant directory if destroy succeeded
 		vagrantDir := filepath.Join(vm.ProjectPath, ".vagrant")
 		if _, err := os.Stat(vagrantDir); err == nil {
-			_ = os.RemoveAll(vagrantDir) // Best effort cleanup
+			if err := os.RemoveAll(vagrantDir); err != nil {
+				// Log warning but don't treat as fatal error
+				errs = append(errs, fmt.Errorf("warning: destroyed VM but failed to clean .vagrant at %s: %w", vm.ProjectPath, err))
+			}
 		}
 	}
 

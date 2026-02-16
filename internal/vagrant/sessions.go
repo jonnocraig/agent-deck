@@ -2,6 +2,7 @@ package vagrant
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 )
@@ -16,25 +17,30 @@ type lockfileData struct {
 // RegisterSession adds a session to the active sessions list.
 // Thread-safe and idempotent - won't add duplicates.
 // Persists the session list to a lockfile.
-func (m *Manager) RegisterSession(sessionID string) {
+// Returns error if lockfile write fails.
+func (m *Manager) RegisterSession(sessionID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	// Check for duplicates
 	for _, id := range m.sessions {
 		if id == sessionID {
-			return
+			return nil
 		}
 	}
 
 	m.sessions = append(m.sessions, sessionID)
-	m.writeLockfile()
+	if err := m.writeLockfile(); err != nil {
+		return fmt.Errorf("register session %s: %w", sessionID, err)
+	}
+	return nil
 }
 
 // UnregisterSession removes a session from the active sessions list.
 // Thread-safe and uses immutable pattern (creates new slice).
 // Persists the updated session list to a lockfile.
-func (m *Manager) UnregisterSession(sessionID string) {
+// Returns error if lockfile write fails.
+func (m *Manager) UnregisterSession(sessionID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -47,7 +53,10 @@ func (m *Manager) UnregisterSession(sessionID string) {
 	}
 
 	m.sessions = filtered
-	m.writeLockfile()
+	if err := m.writeLockfile(); err != nil {
+		return fmt.Errorf("unregister session %s: %w", sessionID, err)
+	}
+	return nil
 }
 
 // SessionCount returns the number of active sessions.
@@ -68,28 +77,36 @@ func (m *Manager) IsLastSession(sessionID string) bool {
 
 // SetDotfilePath sets the VAGRANT_DOTFILE_PATH for isolated VM state per session.
 // This allows multiple sessions to share the same VM without conflicts.
+// Thread-safe.
 func (m *Manager) SetDotfilePath(sessionID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.dotfilePath = filepath.Join(m.projectPath, ".vagrant-"+sessionID)
 }
 
 // writeLockfile persists the current session list to a JSON lockfile.
 // MUST be called under mutex lock.
 // Creates .vagrant directory if it doesn't exist.
-func (m *Manager) writeLockfile() {
+// Returns error if directory creation, JSON marshaling, or file write fails.
+func (m *Manager) writeLockfile() error {
 	lockPath := filepath.Join(m.projectPath, ".vagrant", "agent-deck.lock")
 
 	// Ensure .vagrant directory exists
 	if err := os.MkdirAll(filepath.Dir(lockPath), 0o755); err != nil {
-		return
+		return fmt.Errorf("failed to create .vagrant directory: %w", err)
 	}
 
 	data, err := json.Marshal(lockfileData{Sessions: m.sessions})
 	if err != nil {
-		return
+		return fmt.Errorf("failed to marshal lockfile data: %w", err)
 	}
 
 	// Write lockfile with restrictive permissions
-	_ = os.WriteFile(lockPath, data, 0o644)
+	if err := os.WriteFile(lockPath, data, 0o644); err != nil {
+		return fmt.Errorf("failed to write lockfile: %w", err)
+	}
+
+	return nil
 }
 
 // loadLockfile reads the session list from the JSON lockfile on startup.

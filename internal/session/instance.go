@@ -133,7 +133,7 @@ type Instance struct {
 	// Vagrant mode integration
 	vagrantProvider    VagrantVM    `json:"-"` // Interface for VM lifecycle (nil when not vagrant mode)
 	lastVMHealthCheck  time.Time    `json:"-"` // When we last ran VM health check
-	cleanShutdown      bool         `json:"-"` // Set to true on graceful Stop/Suspend
+	cleanShutdown      atomic.Bool  `json:"-"` // Set to true on graceful Stop/Suspend
 	vmOpDone           chan struct{} `json:"-"` // Signals VM operation completion
 	vmOpInFlight       atomic.Bool  `json:"-"` // True when async VM op running
 	VagrantSeparateVM  bool         `json:"vagrant_separate_vm,omitempty"` // True if this session uses a dedicated VM (vs shared)
@@ -1127,10 +1127,11 @@ func (i *Instance) applyVagrantWrapper(command string) (string, error) {
 
 	// Initialize vagrant provider if needed
 	if i.vagrantProvider == nil {
-		if VagrantProviderFactory == nil {
+		factory := GetVagrantProviderFactory()
+		if factory == nil {
 			return "", fmt.Errorf("vagrant: provider not registered (import vagrant package)")
 		}
-		i.vagrantProvider = VagrantProviderFactory(i.ProjectPath, settings)
+		i.vagrantProvider = factory(i.ProjectPath, settings)
 	}
 
 	// Wait for any in-flight VM operation (e.g., suspend from previous Stop)
@@ -1213,7 +1214,9 @@ func (i *Instance) applyVagrantWrapper(command string) (string, error) {
 	}
 
 	// 6. Register this session
-	i.vagrantProvider.RegisterSession(i.ID)
+	if err := i.vagrantProvider.RegisterSession(i.ID); err != nil {
+		sessionLog.Warn("vagrant_register_session_failed", slog.String("error", err.Error()))
+	}
 
 	// 7. Write MCP config for vagrant (STDIO fallback, no pool sockets)
 	enabledNames := i.getEnabledMCPNames()
@@ -1242,12 +1245,17 @@ func (i *Instance) stopVagrant() {
 	if i.vagrantProvider == nil {
 		return
 	}
+	// Protect vmOpDone channel creation with mutex
+	i.mu.Lock()
 	i.vmOpInFlight.Store(true)
 	i.vmOpDone = make(chan struct{})
+	done := i.vmOpDone // Capture for goroutine
+	i.mu.Unlock()
+
 	go func() {
 		defer func() {
 			i.vmOpInFlight.Store(false)
-			close(i.vmOpDone)
+			close(done)
 		}()
 		settings := GetVagrantSettings()
 		if settings.AutoSuspend == nil || !*settings.AutoSuspend {
@@ -1255,14 +1263,18 @@ func (i *Instance) stopVagrant() {
 		}
 		// Only suspend if this is the last session using the VM
 		if !i.vagrantProvider.IsLastSession(i.ID) {
-			i.vagrantProvider.UnregisterSession(i.ID)
+			if err := i.vagrantProvider.UnregisterSession(i.ID); err != nil {
+				sessionLog.Warn("vagrant_unregister_session_failed", slog.String("error", err.Error()))
+			}
 			return
 		}
-		i.vagrantProvider.UnregisterSession(i.ID)
+		if err := i.vagrantProvider.UnregisterSession(i.ID); err != nil {
+			sessionLog.Warn("vagrant_unregister_session_failed", slog.String("error", err.Error()))
+		}
 		if err := i.vagrantProvider.Suspend(); err != nil {
 			sessionLog.Warn("vagrant_suspend_failed", slog.String("error", err.Error()))
 		}
-		i.cleanShutdown = true
+		i.cleanShutdown.Store(true)
 	}()
 }
 
@@ -1272,25 +1284,36 @@ func (i *Instance) destroyVagrant() {
 	if i.vagrantProvider == nil {
 		return
 	}
+	// Protect vmOpDone channel creation with mutex
+	i.mu.Lock()
 	i.vmOpInFlight.Store(true)
 	i.vmOpDone = make(chan struct{})
+	done := i.vmOpDone // Capture for goroutine
+	i.mu.Unlock()
+
 	go func() {
 		defer func() {
 			i.vmOpInFlight.Store(false)
-			close(i.vmOpDone)
+			close(done)
 		}()
 		settings := GetVagrantSettings()
 		if !settings.AutoDestroy {
 			// Just unregister, don't destroy
-			i.vagrantProvider.UnregisterSession(i.ID)
+			if err := i.vagrantProvider.UnregisterSession(i.ID); err != nil {
+				sessionLog.Warn("vagrant_unregister_session_failed", slog.String("error", err.Error()))
+			}
 			return
 		}
 		// Only destroy if this is the last session using the VM
 		if !i.vagrantProvider.IsLastSession(i.ID) {
-			i.vagrantProvider.UnregisterSession(i.ID)
+			if err := i.vagrantProvider.UnregisterSession(i.ID); err != nil {
+				sessionLog.Warn("vagrant_unregister_session_failed", slog.String("error", err.Error()))
+			}
 			return
 		}
-		i.vagrantProvider.UnregisterSession(i.ID)
+		if err := i.vagrantProvider.UnregisterSession(i.ID); err != nil {
+			sessionLog.Warn("vagrant_unregister_session_failed", slog.String("error", err.Error()))
+		}
 		if err := i.vagrantProvider.Destroy(); err != nil {
 			sessionLog.Warn("vagrant_destroy_failed", slog.String("error", err.Error()))
 		}
@@ -1303,12 +1326,23 @@ func (i *Instance) waitForVagrantOp() error {
 	if !i.vmOpInFlight.Load() {
 		return nil
 	}
-	if i.vmOpDone == nil {
+
+	// Capture vmOpDone channel reference with read lock
+	i.mu.RLock()
+	done := i.vmOpDone
+	i.mu.RUnlock()
+
+	if done == nil {
 		return nil
 	}
+
+	// Wait for operation completion without holding the lock
 	select {
-	case <-i.vmOpDone:
-		i.vmOpDone = make(chan struct{}) // reset for next cycle
+	case <-done:
+		// Nil out vmOpDone — stopVagrant/destroyVagrant will create a new channel when needed
+		i.mu.Lock()
+		i.vmOpDone = nil
+		i.mu.Unlock()
 		return nil
 	case <-time.After(60 * time.Second):
 		return fmt.Errorf("timed out waiting for VM operation to complete")
@@ -1745,7 +1779,7 @@ func (i *Instance) UpdateStatus() error {
 		}
 
 		// Immediate check on first poll after ungraceful shutdown
-		needsCheck := !i.cleanShutdown && i.lastVMHealthCheck.IsZero()
+		needsCheck := !i.cleanShutdown.Load() && i.lastVMHealthCheck.IsZero()
 		if !needsCheck {
 			needsCheck = time.Since(i.lastVMHealthCheck) > vmHealthInterval
 		}
@@ -2809,14 +2843,16 @@ func (i *Instance) Kill() error {
 // restartVagrantSession performs a vagrant-aware restart: checks VM state,
 // recovers if needed, re-syncs config, then respawns the tmux pane.
 func (i *Instance) restartVagrantSession() error {
+	i.cleanShutdown.Store(false) // Reset for fresh health checking after restart
 	settings := GetVagrantSettings()
 
 	// Initialize vagrant provider if needed
 	if i.vagrantProvider == nil {
-		if VagrantProviderFactory == nil {
+		factory := GetVagrantProviderFactory()
+		if factory == nil {
 			return fmt.Errorf("vagrant: provider not registered")
 		}
-		i.vagrantProvider = VagrantProviderFactory(i.ProjectPath, settings)
+		i.vagrantProvider = factory(i.ProjectPath, settings)
 	}
 
 	// 1. Detect VM state and recover

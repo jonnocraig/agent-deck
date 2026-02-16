@@ -3,7 +3,6 @@ package vagrant
 import (
 	"context"
 	"fmt"
-	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -17,21 +16,21 @@ type healthCache struct {
 	ttl       time.Duration
 }
 
-// isValid returns true if the cached result is still within TTL
-func (c *healthCache) isValid() bool {
+// getIfValid returns the cached result and true if still within TTL, or zero value and false if invalid.
+// This method atomically checks validity and retrieves the result under a single lock to prevent TOCTOU races.
+func (c *healthCache) getIfValid() (VMHealth, bool) {
 	if c == nil {
-		return false
+		return VMHealth{}, false
 	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return time.Since(c.lastCheck) < c.ttl
-}
 
-// get returns the cached result (caller should check isValid first)
-func (c *healthCache) get() VMHealth {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.result
+	if time.Since(c.lastCheck) >= c.ttl {
+		return VMHealth{}, false
+	}
+
+	// Return a copy to avoid data races on the returned value
+	return c.result, true
 }
 
 // set updates the cache with a new result
@@ -42,13 +41,13 @@ func (c *healthCache) set(result VMHealth) {
 	c.lastCheck = time.Now()
 }
 
-// initCache initializes the health cache if nil
+// initCache initializes the health cache exactly once using sync.Once for thread safety
 func (m *Manager) initCache() {
-	if m.cache == nil {
+	m.cacheOnce.Do(func() {
 		m.cache = &healthCache{
 			ttl: 30 * time.Second,
 		}
-	}
+	})
 }
 
 // HealthCheck performs comprehensive health check including SSH liveness probe.
@@ -58,8 +57,7 @@ func (m *Manager) HealthCheck() (VMHealth, error) {
 	m.initCache()
 
 	// Check cache for Phase 1 result
-	if m.cache.isValid() {
-		cached := m.cache.get()
+	if cached, valid := m.cache.getIfValid(); valid {
 		// If cached state is "running", we still want to do Phase 2 (SSH probe)
 		// But for non-running states, we can return cached result
 		if cached.State != "running" {
@@ -92,8 +90,7 @@ func (m *Manager) HealthCheck() (VMHealth, error) {
 
 // runVagrantStatus executes vagrant status and parses the state
 func (m *Manager) runVagrantStatus() (string, error) {
-	cmd := exec.Command("vagrant", "status", "--machine-readable")
-	cmd.Dir = m.projectPath
+	cmd := m.vagrantCmd("status", "--machine-readable")
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -113,8 +110,7 @@ func (m *Manager) runSSHProbe() (bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "vagrant", "ssh", "-c", "echo pong")
-	cmd.Dir = m.projectPath
+	cmd := m.vagrantCmdContext(ctx, "ssh", "-c", "echo pong")
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {

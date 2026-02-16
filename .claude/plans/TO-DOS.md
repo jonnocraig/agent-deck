@@ -1,42 +1,27 @@
 # Current Tasks
 
-## Pending — Wave 7: Critical Bug Fixes (4 tasks)
+## Completed — Wave 7: Critical Bug Fixes (4 tasks)
 
-### CRITICAL — Must fix before merge
+- [x] task-7.1: Race condition on `vmOpDone` channel — protected with `i.mu`, capture-before-select pattern
+- [x] task-7.2: Race condition on `cleanShutdown` — converted to `atomic.Bool`
+- [x] task-7.3: TOCTOU race in `healthCache` — combined into `getIfValid()` method
+- [x] task-7.4: `SetDotfilePath` not mutex-protected — guarded with `m.mu`
 
-- [ ] task-7.1 (golang-pro): Race condition on `vmOpDone` channel — `stopVagrant()`, `destroyVagrant()`, and `waitForVagrantOp()` all read/write `i.vmOpDone` without mutex protection. Only `vmOpInFlight` uses atomic. Fix: protect all `vmOpDone` access with `i.mu`, or capture channel reference under lock before select.
-  - Files: `internal/session/instance.go:1245-1246, 1275-1276, 1302-1311`
+## Completed — Wave 8: High Priority Fixes (6 tasks)
 
-- [ ] task-7.2 (golang-pro): Race condition on `cleanShutdown` — written from goroutine in `stopVagrant()` (line 1265) without lock, read elsewhere under `i.mu.Lock()` (line 1748). Fix: convert to `atomic.Bool` or wrap write in `i.mu.Lock()`.
-  - Files: `internal/session/instance.go:1265, 1748`
+- [x] task-8.1: `EnsureRunning(nil)` deadlock — skip pipe when `onPhase` is nil, use `CombinedOutput()`
+- [x] task-8.2: Swallowed errors in `writeLockfile` — return errors, propagate to callers
+- [x] task-8.3: `initCache()` not thread-safe — use `sync.Once`
+- [x] task-8.4: Global mutable `VagrantProviderFactory` — use `atomic.Value` with getter/setter
+- [x] task-8.5: `DestroySuspendedVMs` cleanup on failure — skip cleanup on destroy fail, add Vagrantfile check
+- [x] task-8.6: Health checks bypass `vagrantCmd()` — use `m.vagrantCmd()` + new `vagrantCmdContext()` helper
 
-- [ ] task-7.3 (golang-pro): TOCTOU race in `healthCache.isValid()` then `get()` — two separate RLock acquisitions allow concurrent `set()` between calls. Fix: combine into single `getIfValid() (VMHealth, bool)` method.
-  - Files: `internal/vagrant/health.go:60-67, 20-35`
+## Completed — Code Review Fixes (4 issues)
 
-- [ ] task-7.4 (golang-pro): `SetDotfilePath` not mutex-protected — writes `m.dotfilePath` without lock while `vagrantCmd()` reads it without lock. Fix: guard both with `m.mu`.
-  - Files: `internal/vagrant/sessions.go:71-73`, `internal/vagrant/manager.go:48`
-
-## Pending — Wave 8: High Priority Fixes (6 tasks)
-
-### HIGH — Should fix before merge
-
-- [ ] task-8.1 (golang-pro): `EnsureRunning(nil)` deadlock — creates stdout pipe but never reads it when `onPhase` is nil. Vagrant process blocks once OS pipe buffer fills, causing `cmd.Wait()` to hang. Bridge adapter's `Boot()` calls `EnsureRunning(nil)`. Fix: skip pipe creation when `onPhase` is nil, use `cmd.Run()` directly.
-  - Files: `internal/vagrant/manager.go:87-121`, `internal/vagrant/bridge.go:26`
-
-- [ ] task-8.2 (golang-pro): Swallowed errors in `writeLockfile` — `MkdirAll`, `json.Marshal`, `os.WriteFile` all silently discard errors. Lockfile corruption causes incorrect `IsLastSession` decisions and premature VM destruction. Fix: return errors, propagate from `RegisterSession`/`UnregisterSession`, or at minimum log them.
-  - Files: `internal/vagrant/sessions.go:78-93`
-
-- [ ] task-8.3 (golang-pro): `initCache()` not thread-safe — nil check + assignment on `m.cache` without lock. Two concurrent `HealthCheck()` calls can both enter the block. Fix: use `sync.Once`.
-  - Files: `internal/vagrant/health.go:46-52`
-
-- [ ] task-8.4 (golang-pro): Global mutable `VagrantProviderFactory` — package-level var set via `init()` is not thread-safe for parallel tests. Fix: use `sync.Once` or `atomic.Value`.
-  - Files: `internal/session/vagrant_iface.go:47`, `internal/vagrant/bridge.go:7-9`
-
-- [ ] task-8.5 (golang-pro): `DestroySuspendedVMs` removes `.vagrant` dir even on destroy failure — orphans the VM permanently. Fix: skip cleanup when `vagrant destroy -f` fails. Also add Vagrantfile existence check to prevent path traversal.
-  - Files: `internal/ui/cleanup_dialog.go:338-358`
-
-- [ ] task-8.6 (golang-pro): Health checks bypass `vagrantCmd()` — `runVagrantStatus()` and `runSSHProbe()` use `exec.Command` directly, missing `VAGRANT_DOTFILE_PATH`. Functional bug: health checks query wrong VM in multi-session-isolation mode. Fix: use `m.vagrantCmd()` helper.
-  - Files: `internal/vagrant/health.go:94-109, 112-130`
+- [x] HIGH-1: `waitForVagrantOp` channel reset — nil out instead of recreating
+- [x] HIGH-2: `EnsureRunning` scanner.Err() — moved stderr setup after nil check, added scanner error logging
+- [x] MEDIUM-1: `selectedCount` in cleanup dialog — only count `true` values
+- [x] LOW-4: `cleanShutdown` never reset on restart — added `Store(false)` in `restartVagrantSession()`
 
 ## Completed — Session 10
 
@@ -101,7 +86,7 @@
 | 4 Instance Lifecycle | 5/5 | Done | bridge adapter pattern |
 | 5 UI Integration | 3/3 | Done | task-5.1 done in Wave 2 |
 | 6 Testing & Hardening | 10/10 | Done | 72.1% vagrant, 52.1% session coverage |
-| 7 Critical Bug Fixes | 0/4 | Pending | 4 race conditions from code review |
-| 8 High Priority Fixes | 0/6 | Pending | deadlock, swallowed errors, path traversal |
+| 7 Critical Bug Fixes | 4/4 | Done | 4 race conditions fixed + code review fixes |
+| 8 High Priority Fixes | 6/6 | Done | deadlock, errors, thread safety, path traversal |
 
-**Total: 34/44 tasks complete (77%) — 10 bug fix tasks remaining**
+**Total: 44/44 tasks complete (100%) — all waves done, ready for PR**
