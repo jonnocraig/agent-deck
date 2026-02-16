@@ -45,6 +45,10 @@ skills/             Claude Code skill documentation
 - **Types**: Status as typed constants (`type Status string`), interfaces for abstractions
 - **Tests**: `_test.go` alongside source, `testify` for assertions, `skipIfNoTmuxServer(t)` for integration tests
 
+## Go Tooling
+
+- **gopls-lsp plugin**: The `gopls-lsp` Claude Code plugin is installed, providing LSP integration via `gopls v0.21.1`. Use `gopls` for diagnostics (`gopls check`), symbol lookup (`gopls symbols`), go-to-definition (`gopls definition`), and find-references (`gopls references`) when working on Go code. This runs automatically but can also be invoked directly for targeted analysis.
+
 ## Architecture Notes
 
 - **Bridge adapter pattern** (vagrant): `session/vagrant_iface.go` defines `VagrantVM` interface, `vagrant/bridge.go` implements it. Breaks `session -> vagrant -> session` import cycle. Never import `vagrant` from `session` directly.

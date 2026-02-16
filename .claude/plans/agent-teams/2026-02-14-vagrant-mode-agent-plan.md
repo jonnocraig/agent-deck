@@ -9,6 +9,8 @@
 
 **Tech Stack:** Go 1.24, Bubble Tea TUI, Vagrant, VirtualBox, tmux, SSH
 
+**Go Tooling:** The `gopls-lsp` plugin is installed with `gopls v0.21.1`. When working on Go code, use `gopls` for diagnostics (`gopls check <file>`), symbol lookup (`gopls symbols <file>`), go-to-definition (`gopls definition <file>:<line>:<col>`), and find-references (`gopls references <file>:<line>:<col>`) to validate changes and navigate the codebase accurately.
+
 ---
 
 ## Summary

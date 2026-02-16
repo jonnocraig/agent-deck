@@ -78,6 +78,12 @@
 **Decision**: Split manager.go methods into 9 dedicated files: `vagrantfile.go`, `bootphase.go`, `preflight.go`, `health.go`, `drift.go`, `sessions.go`, `wrap.go`, `sync.go`. Each file contains a cohesive set of Manager methods. `manager.go` retains only struct definition, constructor, and core lifecycle (Up/Suspend/Destroy/Status).
 **Consequences**: All Wave 2 and Wave 3 tasks now target unique files. Zero file contention in parallel execution. Each file gets its own `_test.go`. Wave 4 still requires serialization (all touch `instance.go`).
 
+## 2026-02-16 - gopls-lsp Plugin for Go Code Intelligence
+
+**Context**: Working on a Go 1.24 codebase (189 Go files). Needed better LSP-level code intelligence for diagnostics, navigation, and refactoring.
+**Decision**: Installed `gopls-lsp` Claude Code plugin from marketplace + `gopls v0.21.1` binary. Documented in CLAUDE.md and agent plan so all sessions/agents use it.
+**Consequences**: `gopls check`, `gopls symbols`, `gopls definition`, `gopls references` available for all Go work. Agents should use these for validation when modifying Go code.
+
 ## 2026-02-15 - Import Cycle Resolution: Bridge Adapter Pattern
 
 **Context**: Wave 4 task-4.1 needed instance.go (in session package) to call vagrant.Manager methods. But vagrant package already imports session package for VagrantSettings type. Direct import creates `session → vagrant → session` cycle.

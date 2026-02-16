@@ -38,6 +38,14 @@
 - [ ] task-8.6 (golang-pro): Health checks bypass `vagrantCmd()` — `runVagrantStatus()` and `runSSHProbe()` use `exec.Command` directly, missing `VAGRANT_DOTFILE_PATH`. Functional bug: health checks query wrong VM in multi-session-isolation mode. Fix: use `m.vagrantCmd()` helper.
   - Files: `internal/vagrant/health.go:94-109, 112-130`
 
+## Completed — Session 10
+
+- [x] Installed `gopls-lsp` Claude Code plugin from marketplace
+- [x] Installed `gopls v0.21.1` binary (`go install golang.org/x/tools/gopls@latest`)
+- [x] Verified gopls works: diagnostics, symbols, definitions, references all functional
+- [x] Added "Go Tooling" section to CLAUDE.md documenting gopls-lsp plugin
+- [x] Added gopls-lsp reference to vagrant mode agent plan header
+
 ## Completed — Session 9
 
 ### Wave 5: UI Integration — 3/3 complete (task-5.1 done in Wave 2)
