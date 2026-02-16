@@ -5,54 +5,55 @@
 - Executed Waves 7-8 bug fixes using agentic-ai-implement skill with parallel agent teams
 - Fixed 4 critical race conditions (Wave 7): vmOpDone channel, cleanShutdown, healthCache TOCTOU, SetDotfilePath
 - Fixed 6 high-priority bugs (Wave 8): EnsureRunning deadlock, writeLockfile errors, initCache thread safety, VagrantProviderFactory, DestroySuspendedVMs cleanup, health checks vagrantCmd bypass
-- Ran code review gate, found 2 HIGH + 5 MEDIUM + 5 LOW issues
-- Fixed 4 code review issues: channel reset race, scanner.Err(), selectedCount bug, cleanShutdown reset on restart
-- All 14 packages pass with `-race` flag enabled
+- Ran code review gate, found 2 HIGH + 5 MEDIUM + 5 LOW issues — fixed 4 (2 HIGH, 1 MEDIUM, 1 LOW)
+- Committed Wave 7-8 fixes: `e1f2846`
+- Merged `origin/main` into local `main` (resolved 2 conflicts in tooloptions_test.go, claudeoptions.go)
+- Merged `feature/vagrant` into `main` (resolved 2 conflicts in tooloptions.go, claudeoptions.go)
+- Pushed both `main` and `feature/vagrant` to origin
+- Built binary `v0.16.0-16-gae9d8f9` and installed to both `/opt/homebrew/bin/agent-deck` and `~/.local/bin/agentic-deck`
+- All 14 packages pass with `-race` flag
 
 ## Current State
 
-- Branch: `feature/vagrant`
-- Status: **100% complete** (44/44 tasks, all 8 waves done)
-- All quality gates passing: build, vet, all tests green with race detector
-- Uncommitted changes: Wave 7-8 bug fixes + code review fixes + TO-DOS/SESSION-HANDOFF updates
+- **Branch**: `main` (merge commit `ae9d8f9`)
+- **feature/vagrant**: Fully merged into `main`, pushed
+- **Status**: **100% complete** (44/44 tasks, all 8 waves done, merged)
+- **Working tree**: Clean
+- **Binary**: `v0.16.0` installed and ready — both `agent-deck` and `agentic-deck` commands work
 
-## Files Modified in This Session
+## Git State
 
-### Wave 7 (race conditions)
-- `internal/session/instance.go` — vmOpDone mutex protection, cleanShutdown → atomic.Bool
-- `internal/vagrant/health.go` — getIfValid() combined method replacing isValid()+get()
-- `internal/vagrant/sessions.go` — SetDotfilePath mutex protection
-- `internal/vagrant/manager.go` — vagrantCmd dotfilePath read under mutex
+```
+main:             ae9d8f9 Merge branch 'feature/vagrant'
+feature/vagrant:  e1f2846 fix: resolve race conditions, deadlocks, and error handling (waves 7-8)
+origin/main:      ae9d8f9 (in sync)
+origin/feature/vagrant: e1f2846 (in sync)
+```
 
-### Wave 8 (high-priority bugs)
-- `internal/vagrant/manager.go` — EnsureRunning nil-safe CombinedOutput path, cacheOnce field, vagrantCmdContext helper
-- `internal/vagrant/sessions.go` — writeLockfile returns error, propagated to callers
-- `internal/vagrant/health.go` — initCache uses sync.Once, health checks use vagrantCmd/vagrantCmdContext
-- `internal/session/vagrant_iface.go` — VagrantProviderFactory → atomic.Value with getter/setter, RegisterSession/UnregisterSession return error
-- `internal/vagrant/bridge.go` — SetVagrantProviderFactory usage, error propagation
-- `internal/ui/cleanup_dialog.go` — Vagrantfile check, skip cleanup on destroy failure, selectedCount fix
+## Remaining Code Review Items (deferred, not blocking)
 
-### Code review fixes
-- `internal/session/instance.go` — waitForVagrantOp nils channel instead of recreating, cleanShutdown.Store(false) in restartVagrantSession
-- `internal/vagrant/manager.go` — moved stderrBuf setup after nil check, added scanner.Err() logging
-
-### Tests updated
-- `internal/vagrant/health_test.go` — getIfValid() API
-- `internal/session/instance_test.go` — cleanShutdown atomic.Bool
-- `internal/vagrant/bridge_test.go` — GetVagrantProviderFactory(), t.TempDir()
-- `internal/vagrant/sessions_test.go` — error returns
-
-## Next Steps
-
-1. Commit all Wave 7-8 changes
-2. Push to origin
-3. Create PR to `main` using `superpowers:finishing-a-development-branch`
-4. Address any remaining MEDIUM code review items as follow-up (file size, magic numbers, DRY)
+These MEDIUM/LOW items from the code review are valid but are refactoring scope:
+- MEDIUM-4: instance.go is 3995 lines (5x the 800-line guideline) — extract vagrant methods to instance_vagrant.go
+- MEDIUM-5: applyVagrantWrapper is 115 lines — extract vagrantBootVM() and vagrantPostBootSetup()
+- MEDIUM-6: Magic numbers (5s SSH timeout, 60s wait timeout, 30s cache TTL) — extract to named constants
+- MEDIUM-2: buildVMHealth switch has redundant cases — collapse into default
+- MEDIUM-3: DestroySuspendedVMs path validation — add filepath.IsAbs check
+- LOW-1: formatVMAge returns "1 days" — fix singular/plural
+- LOW-2: healthCache TTL hardcoded vs HealthCheckInterval setting
+- LOW-3: ListSuspendedAgentDeckVMs shows all Vagrant VMs, not just agent-deck ones
+- LOW-5: RegisterSession uses append (not immutable copy)
 
 ## Architecture Reminders
 
-- **VagrantProviderFactory**: Now uses `atomic.Value` — access via `GetVagrantProviderFactory()` / `SetVagrantProviderFactory()`
-- **RegisterSession/UnregisterSession**: Now return `error` — callers log warnings but don't fail
+- **VagrantProviderFactory**: Uses `atomic.Value` — access via `GetVagrantProviderFactory()` / `SetVagrantProviderFactory()`
+- **RegisterSession/UnregisterSession**: Return `error` — callers log warnings but don't fail
 - **healthCache**: Uses `getIfValid()` instead of separate `isValid()` + `get()`
 - **initCache**: Uses `sync.Once` via `m.cacheOnce` field on Manager
-- **vagrantCmdContext**: New context-aware variant of `vagrantCmd()` for timeout support
+- **vagrantCmdContext**: Context-aware variant of `vagrantCmd()` for timeout support
+- **Bridge adapter pattern**: `session/vagrant_iface.go` defines interface, `vagrant/bridge.go` implements. Never import vagrant from session.
+- **Manager split**: 9 concern-separated files. `manager.go` has struct + constructor + core lifecycle only.
+
+## Next Steps
+
+1. Address deferred code review items (optional refactoring)
+2. Continue with other agent-deck features or maintenance
