@@ -105,6 +105,9 @@ type UserConfig struct {
 
 	// Tmux defines tmux option overrides applied to every session
 	Tmux TmuxSettings `toml:"tmux"`
+
+	// Vagrant defines Vagrant VM settings for vagrant mode
+	Vagrant VagrantSettings `toml:"vagrant"`
 }
 
 // ProfileSettings defines per-profile configuration overrides.
@@ -739,6 +742,42 @@ type MaintenanceSettings struct {
 	// Enabled enables the maintenance worker (default: false)
 	// Prunes Gemini logs, cleans old backups, archives bloated sessions
 	Enabled bool `toml:"enabled"`
+}
+
+// VagrantSettings defines Vagrant VM settings for vagrant mode
+type VagrantSettings struct {
+	MemoryMB            int               `toml:"memory_mb"`                  // Default: 4096
+	CPUs                int               `toml:"cpus"`                       // Default: 2
+	Box                 string            `toml:"box"`                        // Default: "bento/ubuntu-24.04"
+	AutoSuspend         *bool             `toml:"auto_suspend"`               // Default: true
+	AutoDestroy         bool              `toml:"auto_destroy"`               // Default: false
+	HostGatewayIP       string            `toml:"host_gateway_ip"`            // Default: "10.0.2.2"
+	SyncedFolderType    string            `toml:"synced_folder_type"`         // Default: "virtualbox"
+	ProvisionPackages   []string          `toml:"provision_packages"`         // Additional packages (appended to base set)
+	ProvisionPkgExclude []string          `toml:"provision_packages_exclude"` // Packages to remove from base set
+	NpmPackages         []string          `toml:"npm_packages"`               // Additional global npm packages
+	ProvisionScript     string            `toml:"provision_script"`           // Path to custom shell script
+	Vagrantfile         string            `toml:"vagrantfile"`                // Path to custom Vagrantfile (disables generation)
+	HealthCheckInterval int               `toml:"health_check_interval"`      // Default: 30 (seconds)
+	PortForwards        []PortForward     `toml:"port_forwards"`              // Port forwarding rules
+	Env                 map[string]string `toml:"env"`                        // Additional env vars for VM sessions
+	ForwardProxyEnv     *bool             `toml:"forward_proxy_env"`          // Default: true — auto-forward host proxy vars
+}
+
+// PortForward defines a port forwarding rule
+type PortForward struct {
+	Guest    int    `toml:"guest"`    // Port inside VM
+	Host     int    `toml:"host"`     // Port on host
+	Protocol string `toml:"protocol"` // Default: "tcp"
+}
+
+// GetVagrantSettings returns the vagrant settings from user config with defaults applied.
+func GetVagrantSettings() VagrantSettings {
+	config, err := LoadUserConfig()
+	if err != nil || config == nil {
+		return VagrantSettings{}
+	}
+	return config.Vagrant
 }
 
 // Default user config (empty maps)

@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/asheshgoplani/agent-deck/internal/logging"
@@ -137,6 +138,16 @@ type Instance struct {
 	// Set by MCP dialog Apply() to avoid race condition where Apply writes
 	// config then Restart immediately overwrites it with different pool state
 	SkipMCPRegenerate bool `json:"-"` // Don't persist, transient flag
+
+	// Vagrant mode fields
+	VagrantSeparateVM  bool        `json:"vagrant_separate_vm,omitempty"` // Each session gets its own VM
+	VagrantBootPhase   string      `json:"-"`                            // Current boot phase for UI feedback
+	VagrantBootStarted time.Time   `json:"-"`                            // When boot started (for progress display)
+	vagrantProvider    VagrantVM                                         // VM lifecycle interface
+	vmOpInFlight       atomic.Bool                                       // True when async VM op is running
+	vmOpDone           chan struct{}                                      // Signals async VM op completion
+	cleanShutdown      atomic.Bool                                       // True when stop completed cleanly
+	ErrorMessage       string      `json:"error_message,omitempty"`      // Human-readable error for UI
 }
 
 // GetStatusThreadSafe returns the session status with read-lock protection.
@@ -1322,6 +1333,14 @@ func (i *Instance) Start() error {
 		return err
 	}
 
+	// Apply vagrant wrapper if vagrant mode is enabled
+	if i.IsVagrantMode() {
+		command, err = i.applyVagrantWrapper(command)
+		if err != nil {
+			return err
+		}
+	}
+
 	// Load custom patterns for status detection
 	i.loadCustomPatternsFromConfig()
 
@@ -1404,6 +1423,14 @@ func (i *Instance) StartWithMessage(message string) error {
 	command, err = i.applyWrapper(command)
 	if err != nil {
 		return err
+	}
+
+	// Apply vagrant wrapper if vagrant mode is enabled
+	if i.IsVagrantMode() {
+		command, err = i.applyVagrantWrapper(command)
+		if err != nil {
+			return err
+		}
 	}
 
 	// Load custom patterns for status detection
@@ -3820,3 +3847,232 @@ func UpdateClaudeSessionsWithDedup(instances []*Instance) {
 	// No re-detection step - tmux env is the authoritative source
 	// Sessions will get their IDs from UpdateClaudeSession() during normal status updates
 }
+
+// --- Vagrant Mode Integration ---
+
+// IsVagrantMode returns true if this instance has vagrant mode enabled.
+func (i *Instance) IsVagrantMode() bool {
+	opts, err := UnmarshalClaudeOptions(i.ToolOptionsJSON)
+	if err != nil || opts == nil {
+		return false
+	}
+	return opts.UseVagrantMode
+}
+
+// applyVagrantWrapper sets up the vagrant VM and wraps the command for execution inside it.
+// Called during Start()/StartWithMessage() when vagrant mode is enabled.
+// Performs: preflight -> vagrantfile -> sudo skill -> ensureRunning -> MCP config -> sync -> wrap command
+func (i *Instance) applyVagrantWrapper(command string) (string, error) {
+	settings := GetVagrantSettings()
+
+	// Initialize vagrant provider if needed
+	if i.vagrantProvider == nil {
+		factory := GetVagrantProviderFactory()
+		if factory == nil {
+			return "", fmt.Errorf("vagrant: provider not registered (import vagrant package)")
+		}
+		i.vagrantProvider = factory(i.ProjectPath, settings)
+	}
+
+	// Wait for any in-flight VM operation (e.g., suspend from previous Stop)
+	if err := i.waitForVagrantOp(); err != nil {
+		return "", fmt.Errorf("vagrant: %w", err)
+	}
+
+	// 1. Preflight checks (disk space, VirtualBox version)
+	if err := i.vagrantProvider.PreflightCheck(); err != nil {
+		i.ErrorMessage = err.Error()
+		i.Status = StatusError
+		return "", fmt.Errorf("vagrant preflight failed: %w", err)
+	}
+
+	// 2. Generate Vagrantfile
+	if err := i.vagrantProvider.EnsureVagrantfile(); err != nil {
+		i.ErrorMessage = err.Error()
+		i.Status = StatusError
+		return "", fmt.Errorf("vagrant: failed to generate Vagrantfile: %w", err)
+	}
+
+	// 3. Write sudo skill and credential guard hook
+	if err := i.vagrantProvider.EnsureSudoSkill(); err != nil {
+		sessionLog.Warn("vagrant_sudo_skill_failed", slog.String("error", err.Error()))
+	}
+
+	// 4. Multi-session handling: detect existing running VM
+	vmStatus, statusErr := i.vagrantProvider.Status()
+	if statusErr == nil && vmStatus == "running" && i.vagrantProvider.SessionCount() > 0 {
+		// VM is already running with other sessions
+		if i.VagrantSeparateVM {
+			i.vagrantProvider.SetDotfilePath(i.ID)
+			i.VagrantBootPhase = "Booting VM..."
+			i.VagrantBootStarted = time.Now()
+			if err := i.vagrantProvider.Boot(); err != nil {
+				i.VagrantBootPhase = ""
+				i.ErrorMessage = err.Error()
+				i.Status = StatusError
+				return "", fmt.Errorf("vagrant: failed to start separate VM: %w", err)
+			}
+			i.VagrantBootPhase = ""
+		}
+		// Share mode (default): VM already running, skip Boot()
+	} else {
+		// No existing VM or no other sessions — normal boot
+		if i.VagrantSeparateVM {
+			i.vagrantProvider.SetDotfilePath(i.ID)
+		}
+		i.VagrantBootPhase = "Booting VM..."
+		i.VagrantBootStarted = time.Now()
+		if err := i.vagrantProvider.Boot(); err != nil {
+			i.VagrantBootPhase = ""
+			i.ErrorMessage = err.Error()
+			i.Status = StatusError
+			return "", fmt.Errorf("vagrant: failed to start VM: %w", err)
+		}
+		i.VagrantBootPhase = ""
+	}
+
+	// 5. Write config hash for drift detection
+	if err := i.vagrantProvider.WriteConfigHash(); err != nil {
+		sessionLog.Warn("vagrant_write_hash_failed", slog.String("error", err.Error()))
+	}
+
+	// 5b. Check for config drift and re-provision if needed
+	if i.vagrantProvider.HasConfigDrift() {
+		if err := i.vagrantProvider.EnsureVagrantfile(); err != nil {
+			sessionLog.Warn("vagrant_drift_vagrantfile_failed", slog.String("error", err.Error()))
+		}
+		if err := i.vagrantProvider.Provision(); err != nil {
+			sessionLog.Warn("vagrant_reprovision_failed", slog.String("error", err.Error()))
+		} else {
+			if err := i.vagrantProvider.WriteConfigHash(); err != nil {
+				sessionLog.Warn("vagrant_drift_hash_failed", slog.String("error", err.Error()))
+			}
+			sessionLog.Info("vagrant_reprovisioned", slog.String("session", i.ID))
+		}
+	}
+
+	// 6. Register this session
+	if err := i.vagrantProvider.RegisterSession(i.ID); err != nil {
+		sessionLog.Warn("vagrant_register_session_failed", slog.String("error", err.Error()))
+	}
+
+	// 7. Write MCP config for vagrant (STDIO fallback, no pool sockets)
+	enabledNames := i.getEnabledMCPNames()
+	if err := i.vagrantProvider.WriteMCPJson(i.ProjectPath, enabledNames); err != nil {
+		sessionLog.Warn("vagrant_mcp_config_failed", slog.String("error", err.Error()))
+	}
+
+	// 8. Sync Claude config into VM
+	if err := i.vagrantProvider.SyncClaudeConfig(); err != nil {
+		sessionLog.Warn("vagrant_sync_config_failed", slog.String("error", err.Error()))
+	}
+
+	// 9. Collect env vars and tunnel ports for SSH wrapping
+	envVarNames := i.vagrantProvider.CollectEnvVarNames(enabledNames, settings.Env)
+	tunnelPorts := i.vagrantProvider.CollectTunnelPorts(enabledNames)
+
+	// 10. Wrap command for execution inside VM
+	wrappedCmd := i.vagrantProvider.WrapCommand(command, envVarNames, tunnelPorts)
+
+	return wrappedCmd, nil
+}
+
+// stopVagrant suspends the VM in a goroutine, signaling vmOpDone on completion.
+func (i *Instance) stopVagrant() {
+	if i.vagrantProvider == nil {
+		return
+	}
+	i.mu.Lock()
+	i.vmOpInFlight.Store(true)
+	i.vmOpDone = make(chan struct{})
+	done := i.vmOpDone
+	i.mu.Unlock()
+
+	go func() {
+		defer func() {
+			i.vmOpInFlight.Store(false)
+			close(done)
+		}()
+		settings := GetVagrantSettings()
+		if settings.AutoSuspend == nil || !*settings.AutoSuspend {
+			return
+		}
+		if !i.vagrantProvider.IsLastSession(i.ID) {
+			if err := i.vagrantProvider.UnregisterSession(i.ID); err != nil {
+				sessionLog.Warn("vagrant_unregister_session_failed", slog.String("error", err.Error()))
+			}
+			return
+		}
+		if err := i.vagrantProvider.UnregisterSession(i.ID); err != nil {
+			sessionLog.Warn("vagrant_unregister_session_failed", slog.String("error", err.Error()))
+		}
+		if err := i.vagrantProvider.Suspend(); err != nil {
+			sessionLog.Warn("vagrant_suspend_failed", slog.String("error", err.Error()))
+		}
+		i.cleanShutdown.Store(true)
+	}()
+}
+
+// destroyVagrant destroys the VM in a goroutine when AutoDestroy is enabled.
+func (i *Instance) destroyVagrant() {
+	if i.vagrantProvider == nil {
+		return
+	}
+	i.mu.Lock()
+	i.vmOpInFlight.Store(true)
+	i.vmOpDone = make(chan struct{})
+	done := i.vmOpDone
+	i.mu.Unlock()
+
+	go func() {
+		defer func() {
+			i.vmOpInFlight.Store(false)
+			close(done)
+		}()
+		settings := GetVagrantSettings()
+		if !settings.AutoDestroy {
+			if err := i.vagrantProvider.UnregisterSession(i.ID); err != nil {
+				sessionLog.Warn("vagrant_unregister_session_failed", slog.String("error", err.Error()))
+			}
+			return
+		}
+		if !i.vagrantProvider.IsLastSession(i.ID) {
+			if err := i.vagrantProvider.UnregisterSession(i.ID); err != nil {
+				sessionLog.Warn("vagrant_unregister_session_failed", slog.String("error", err.Error()))
+			}
+			return
+		}
+		if err := i.vagrantProvider.UnregisterSession(i.ID); err != nil {
+			sessionLog.Warn("vagrant_unregister_session_failed", slog.String("error", err.Error()))
+		}
+		if err := i.vagrantProvider.Destroy(); err != nil {
+			sessionLog.Warn("vagrant_destroy_failed", slog.String("error", err.Error()))
+		}
+	}()
+}
+
+// waitForVagrantOp blocks until any in-flight VM operation completes or times out.
+func (i *Instance) waitForVagrantOp() error {
+	if !i.vmOpInFlight.Load() {
+		return nil
+	}
+	i.mu.RLock()
+	done := i.vmOpDone
+	i.mu.RUnlock()
+	if done == nil {
+		return nil
+	}
+	select {
+	case <-done:
+		return nil
+	case <-time.After(60 * time.Second):
+		return fmt.Errorf("timed out waiting for previous VM operation to complete")
+	}
+}
+
+// getEnabledMCPNames returns the list of MCP names that are enabled for this session.
+func (i *Instance) getEnabledMCPNames() []string {
+	return i.LoadedMCPNames
+}
+
+// Vagrant provider factory is defined in vagrant_iface.go (SetVagrantProviderFactory/GetVagrantProviderFactory)
