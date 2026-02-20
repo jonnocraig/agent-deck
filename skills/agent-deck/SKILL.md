@@ -257,6 +257,74 @@ agent-deck worktree cleanup --force
 | **Code review** | Agent reviews PR in worktree while main work continues |
 | **Hotfix work** | Quick branch off main without disrupting feature work |
 
+## Vagrant Mode (Isolated VM Sessions)
+
+Run Claude Code inside an isolated Ubuntu 24.04 VM with full sudo access. The VM is auto-managed — agent-deck handles boot, suspend, and destroy.
+
+**Prerequisites:** Vagrant 2.4+ and VirtualBox 7.0+ (or UTM on Apple Silicon)
+
+### Quick Start
+
+1. Press `n` in TUI to create a new session
+2. Check "Just do it (vagrant sudo)" option
+3. Session will boot a VM, sync project files, and launch Claude inside
+
+### What Happens on Session Start
+
+1. Preflight checks (disk space, VirtualBox)
+2. Vagrantfile auto-generated (unless custom one specified)
+3. `vagrant-sudo` skill written to `.claude/skills/vagrant-sudo.md` (gives Claude VM-specific guidelines)
+4. Credential guard hook injected into `.claude/settings.local.json` (blocks reading `.env`, keys, etc.)
+5. VM boots (or reuses existing VM in shared mode)
+6. MCP config, environment variables, and SSH tunnels set up
+7. Claude command wrapped with `vagrant ssh` and launched
+
+### Configuration
+
+**File:** `~/.agent-deck/config.toml`
+
+```toml
+[vagrant]
+memory_mb = 8192                     # Default: 4096
+cpus = 4                             # Default: 2
+box = "bento/ubuntu-24.04"           # Vagrant box image
+auto_suspend = true                  # Suspend VM when session stops
+auto_destroy = false                 # Destroy VM when session deleted
+health_check_interval = 30           # Seconds between health checks
+synced_folder_type = "virtualbox"    # "virtualbox", "nfs", "rsync"
+provision_packages = ["postgresql"]  # Extra apt packages
+npm_packages = ["typescript"]        # Global npm packages
+provision_script = "~/vm-setup.sh"   # Custom provisioning script
+forward_proxy_env = true             # Forward HTTP_PROXY etc.
+
+# Port forwarding
+[[vagrant.port_forwards]]
+guest = 3000
+host = 3000
+
+# Environment variables passed to VM sessions
+[vagrant.env]
+DATABASE_URL = "postgres://localhost/mydb"
+NODE_ENV = "development"
+```
+
+### Multi-Session VM Sharing
+
+- **Shared mode (default)**: Multiple sessions share one VM, registered via lockfile
+- **Separate mode**: Each session gets its own VM (set per-session)
+- Last session to stop triggers auto-suspend (if enabled)
+- Last session to be deleted triggers auto-destroy (if enabled)
+
+### Vagrant Troubleshooting
+
+| Issue | Solution |
+|-------|----------|
+| First VM boot is slow | Box download is one-time; subsequent boots are fast |
+| Apple Silicon kext error | Install VirtualBox beta for ARM or use UTM |
+| SSH timeout | Check VirtualBox networking; try `vagrant ssh` manually |
+| Port already in use | Change `host` port in `[[vagrant.port_forwards]]` |
+| File watchers not working | Use polling mode (auto-injected for VirtualBox sync) |
+
 ## Configuration
 
 **File:** `~/.agent-deck/config.toml`

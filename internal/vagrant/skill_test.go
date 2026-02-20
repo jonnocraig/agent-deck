@@ -131,6 +131,80 @@ func TestEnsureSudoSkillIdempotent(t *testing.T) {
 	}
 }
 
+// TestEnsureSudoSkillInjectsCredentialGuard verifies that EnsureSudoSkill
+// also creates the credential guard hook in settings.local.json.
+func TestEnsureSudoSkillInjectsCredentialGuard(t *testing.T) {
+	tmpDir := t.TempDir()
+	settings := session.VagrantSettings{}
+	mgr := NewManager(tmpDir, settings)
+
+	if err := mgr.EnsureSudoSkill(); err != nil {
+		t.Fatalf("EnsureSudoSkill failed: %v", err)
+	}
+
+	// Verify skill file exists
+	skillPath := filepath.Join(tmpDir, ".claude", "skills", "vagrant-sudo.md")
+	if _, err := os.Stat(skillPath); os.IsNotExist(err) {
+		t.Fatal("Skill file was not created")
+	}
+
+	// Verify settings.local.json exists with credential guard hook
+	settingsPath := filepath.Join(tmpDir, ".claude", "settings.local.json")
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("settings.local.json was not created: %v", err)
+	}
+
+	var settings2 map[string]interface{}
+	if err := json.Unmarshal(data, &settings2); err != nil {
+		t.Fatalf("Failed to parse settings.local.json: %v", err)
+	}
+
+	hooks, ok := settings2["hooks"].(map[string]interface{})
+	if !ok {
+		t.Fatal("settings.local.json missing 'hooks' key")
+	}
+
+	preToolUse, ok := hooks["PreToolUse"].([]interface{})
+	if !ok || len(preToolUse) == 0 {
+		t.Fatal("settings.local.json missing 'PreToolUse' hook array")
+	}
+
+	// Verify the hook matches Read|View|Cat
+	hookEntry, ok := preToolUse[0].(map[string]interface{})
+	if !ok {
+		t.Fatal("PreToolUse hook entry is not a map")
+	}
+	matcher, ok := hookEntry["matcher"].(string)
+	if !ok || matcher != "Read|View|Cat" {
+		t.Errorf("Expected matcher 'Read|View|Cat', got %q", matcher)
+	}
+}
+
+// TestEnsureSudoSkillHasFrontmatter verifies the skill includes YAML frontmatter
+// so Claude Code recognizes it as a proper skill.
+func TestEnsureSudoSkillHasFrontmatter(t *testing.T) {
+	skill := GetVagrantSudoSkill()
+
+	if !strings.HasPrefix(skill, "---\n") {
+		t.Fatal("Skill should start with YAML frontmatter delimiter '---'")
+	}
+
+	if !strings.Contains(skill, "name: vagrant-sudo") {
+		t.Error("Skill frontmatter should contain 'name: vagrant-sudo'")
+	}
+
+	if !strings.Contains(skill, "description:") {
+		t.Error("Skill frontmatter should contain a 'description:' field")
+	}
+
+	// Verify closing frontmatter delimiter
+	parts := strings.SplitN(skill, "---", 3)
+	if len(parts) < 3 {
+		t.Fatal("Skill should have opening and closing '---' frontmatter delimiters")
+	}
+}
+
 // TestGetCredentialGuardHook verifies the hook structure
 func TestGetCredentialGuardHook(t *testing.T) {
 	hook := GetCredentialGuardHook()

@@ -3,6 +3,7 @@ package vagrant
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -226,7 +227,11 @@ func TestEnsureVagrantfileGeneration(t *testing.T) {
 		`vb.gui = false`,
 		`--audio`, `none`,
 		`--usb`, `off`,
-		`--nested-hw-virt`, `on`,
+	}
+
+	// Nested hardware virtualization is only enabled on x86_64
+	if runtime.GOARCH != "arm64" {
+		expectedStrings = append(expectedStrings, `--nested-hw-virt`, `on`)
 	}
 
 	for _, expected := range expectedStrings {

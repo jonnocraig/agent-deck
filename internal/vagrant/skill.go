@@ -10,7 +10,12 @@ import (
 // GetVagrantSudoSkill returns the markdown content for the vagrant-sudo skill.
 // This skill informs Claude that it's running in an isolated Ubuntu VM with sudo access.
 func GetVagrantSudoSkill() string {
-	return `# Vagrant Sudo Skill
+	return `---
+name: vagrant-sudo
+description: Guidelines for running Claude Code inside an isolated Vagrant VM with sudo access. Loaded automatically when a vagrant-mode session starts.
+---
+
+# Vagrant Sudo Skill
 
 You are running in an isolated Ubuntu 24.04 LTS virtual machine with sudo access.
 
@@ -73,8 +78,9 @@ tsc --watch --poll
 `
 }
 
-// EnsureSudoSkill writes the vagrant-sudo skill to the project's .claude/skills directory.
-// This method is idempotent and will overwrite the file if it already exists.
+// EnsureSudoSkill writes the vagrant-sudo skill to the project's .claude/skills directory
+// and injects the credential guard hook into .claude/settings.local.json.
+// This method is idempotent and will overwrite files if they already exist.
 func (m *Manager) EnsureSudoSkill() error {
 	skillsDir := filepath.Join(m.projectPath, ".claude", "skills")
 	if err := os.MkdirAll(skillsDir, 0755); err != nil {
@@ -86,6 +92,11 @@ func (m *Manager) EnsureSudoSkill() error {
 
 	if err := os.WriteFile(skillPath, []byte(content), 0644); err != nil {
 		return fmt.Errorf("failed to write vagrant-sudo skill: %w", err)
+	}
+
+	// Inject the credential guard PreToolUse hook into settings.local.json
+	if err := InjectCredentialGuardHook(m.projectPath); err != nil {
+		return fmt.Errorf("failed to inject credential guard hook: %w", err)
 	}
 
 	return nil

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 )
@@ -177,6 +178,13 @@ func (m *Manager) generateVagrantfile() string {
 		syncType = "virtualbox"
 	}
 
+	// Nested hardware virtualization is only supported on x86_64.
+	// On ARM64 (Apple Silicon), this flag causes VirtualBox to crash with "guru meditation".
+	nestedHwVirt := ""
+	if runtime.GOARCH != "arm64" {
+		nestedHwVirt = `    vb.customize ["modifyvm", :id, "--nested-hw-virt", "on"]` + "\n"
+	}
+
 	template := fmt.Sprintf(`Vagrant.configure("2") do |config|
   config.vm.box = %q
   config.vm.hostname = %q
@@ -190,8 +198,7 @@ func (m *Manager) generateVagrantfile() string {
     vb.gui = false
     vb.customize ["modifyvm", :id, "--audio", "none"]
     vb.customize ["modifyvm", :id, "--usb", "off"]
-    vb.customize ["modifyvm", :id, "--nested-hw-virt", "on"]
-  end
+%s  end
 
   config.vm.provision "shell", inline: <<-SHELL
     export DEBIAN_FRONTEND=noninteractive
@@ -212,6 +219,7 @@ end
 		portForwards.String(),
 		memory,
 		cpus,
+		nestedHwVirt,
 		packagesStr,
 		npmSection.String(),
 		provisionScriptSection,
