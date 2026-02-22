@@ -1,5 +1,29 @@
 # Architecture Decisions
 
+## 2026-02-22 - Skill Directory Format for Claude Code Discovery
+
+**Context**: `EnsureSudoSkill()` wrote the operating-in-vagrant skill as a standalone `operating-in-vagrant.md` file. Claude Code v2.1.50 only discovers skills as directories with `SKILL.md` as entrypoint (`<skill-name>/SKILL.md`). The standalone file was invisible to Claude Code.
+**Decision**: Changed `EnsureSudoSkill()` to write `operating-in-vagrant/SKILL.md` (directory format). Added legacy cleanup that removes `operating-in-vagrant.md` and `vagrant-sudo.md` on each invocation.
+**Consequences**: Claude Code properly discovers the skill. Legacy files from previous sessions cleaned up automatically. Tests updated to expect new path structure.
+
+## 2026-02-22 - Pre-load VM Context via ~/.claude/CLAUDE.md
+
+**Context**: Claude Code lazy-loads skills (descriptions in context, full content only when invoked). The operating-in-vagrant skill was discovered but not pre-loaded — users had to ask Claude to invoke it.
+**Decision**: Added step 6 to `SyncClaudeConfig()` that writes `~/.claude/CLAUDE.md` inside the VM with the skill body (YAML frontmatter stripped). CLAUDE.md is always loaded in full by Claude Code at session start. The skill directory remains for `/operating-in-vagrant` slash command access.
+**Consequences**: VM context is immediately available to Claude without user interaction. Dual presence (CLAUDE.md + skill) provides both automatic context and on-demand invocation.
+
+## 2026-02-22 - User Profile Sync via Batch Tar Transfer (Planned)
+
+**Context**: VM sessions only sync 6 items (configs, settings, statusline, OAuth, VM CLAUDE.md). User's skills (~22), commands (~35), agents (~22), and rules (9) are missing. Syncing 80+ files individually via `writeFileToVM()` would take ~16 seconds.
+**Decision**: Batch transfer via tar archive. Combine all 4 directories (skills/commands/agents/rules) into a single tar with symlinks dereferenced. Extract in VM with one SSH call (~200ms). Merge user's CLAUDE.md with VM context instead of overwriting.
+**Consequences**: Full user profile available in VM. Single SSH call vs 80+ individual calls. Symlinks from plugin caches resolved to real content. Plan at `.claude/plans/snug-marinating-teapot.md`.
+
+## 2026-02-22 - OAuth Credential Forwarding for Vagrant VM
+
+**Context**: Max subscription users authenticate via OAuth, not API keys. Vagrant VM sessions stripped `oauthAccount` from config files and only forwarded `ANTHROPIC_API_KEY` via SSH, so Max users hit a login prompt every time Claude Code started in the VM.
+**Decision**: Three-pronged approach: (1) File-based: extract OAuth credentials from host (macOS Keychain via `security find-generic-password` or `~/.claude/.credentials.json` on Linux), write as `~/.claude/.credentials.json` inside VM with `chmod 600`. (2) Env var: forward `CLAUDE_CODE_OAUTH_TOKEN` via SSH `SendEnv` alongside `ANTHROPIC_API_KEY`. (3) Onboarding bypass: inject `hasCompletedOnboarding: true` into both global and user configs synced to VM via new `injectVMFields()` function.
+**Consequences**: Max users authenticate seamlessly in VM. Access + refresh tokens synced so auto-refresh works natively. Env var override available for CI/manual flows. Injectable `extractOAuthCredentialsFunc` follows existing `getAvailableMCPsFunc` pattern for clean testing. Credentials never logged (only success/failure).
+
 ## 2026-02-21 - Config Sync: Strip host-only fields with generic stripJSONKeys()
 
 **Context**: Screenshots from VM testing showed 5 errors: `installMethod is native` (directory/binary not found), `22 plugins failed to install`, `Not logged in`, `~/.local/bin not in PATH`. Root cause: host config files synced verbatim to VM contain fields that reference host-specific state.
@@ -18,56 +42,14 @@
 **Decision**: Clean all `mcpServers` from global/user Claude configs inside VM. Install official `@modelcontextprotocol/server-*` npm packages globally. Configure project-level `.mcp.json` with STDIO transport using `npx -y` invocations.
 **Consequences**: MCP servers run natively inside VM. No dependency on host-side agent-deck or pool sockets. Packages cached globally via `npm install -g` to avoid repeated npx downloads. Node.js 18.x works despite engine warnings for 20+.
 
-## 2026-02-21 - Created vagrant-vm-setup skill for Claude Code in Vagrant
-
-**Context**: Running Claude Code inside a Vagrant VM has multiple non-obvious constraints (broken host MCPs, inotify limitations, credential guards, networking). Need a reusable skill to document these patterns.
-**Decision**: Created `vagrant-vm-setup` skill at `.claude/skills/vagrant-vm-setup/` with progressive disclosure: SKILL.md (main guide), MCP-SETUP.md (detailed MCP installation), TROUBLESHOOTING.md (common issues). Follows Anthropic skill best practices (concise, one-level references, under 500 lines).
-**Consequences**: Claude Code automatically loads the skill when operating in VM context. New sessions get immediate guidance on constraints and MCP setup. Skill is project-local (not global).
-
-## 2026-02-21 - Vagrant Config Sync: Strip mcpServers from host configs
-
-**Context**: `SyncClaudeConfig()` copies `~/.claude/.claude.json` and `~/.claude.json` into the VM. These contain `mcpServers` definitions that reference host-local binaries (npx, node packages) which don't exist inside the VM, causing all 14 MCPs to fail.
-**Decision**: Add `stripMCPServers()` that removes the `mcpServers` key from JSON config before writing to VM. MCP config for the VM should come exclusively from the project-level `.mcp.json` generated by `WriteMCPJson`.
-**Consequences**: Clean MCP state in VM. Host MCPs don't pollute VM config. STDIO MCPs still need npm packages installed in VM provisioning to work via `.mcp.json`.
-
 ## 2026-02-21 - Vagrant Command Wrapping: Simplified tmux-free command
 
 **Context**: `buildClaudeCommand()` generates commands containing `tmux set-environment CLAUDE_SESSION_ID "$session_id"` which fails inside the VM (no tmux server). Error: `error connecting to /tmp/tmux-1000/default`.
 **Decision**: Add `buildVagrantClaudeCommand()` that produces a clean command using `export` instead of `tmux set-environment`. Called from `applyVagrantWrapper` instead of wrapping the tmux-dependent command.
 **Consequences**: No tmux errors inside VM. Session ID available via env var. Host-side tmux session ID capture still works (via `tmux.SetEnvironment` after `Start()`).
 
-## 2026-02-21 - Vagrant Visual Badge: Blue [Vagrant] indicator
-
-**Context**: Vagrant sessions need visual distinction from normal sessions.
-**Decision**: Added `ColorBlue` (#2ac3de dark / #166775 light) to theme. `[Vagrant]` badge in session list (bold blue, follows YOLO/worktree pattern). Blue pill badge in preview pane (next to tool/group badges).
-**Consequences**: Consistent with existing badge patterns. New color available for future use.
-
 ## 2026-02-14 - Vagrant Mode: Wrapper Command Approach (Approach 1)
 
 **Context**: User wants a "Just do it" checkbox that spawns Claude Code in an isolated Vagrant VM with `--dangerously-skip-permissions` and sudo access. Three approaches evaluated by multi-perspective brainstorm.
 **Decision**: Wrapper Command approach -- add checkbox, auto-manage VM lifecycle, wrap commands via `vagrant ssh -c`. No provider abstraction, no security hardening beyond VM isolation.
 **Consequences**: Minimal complexity (4 modified + 3 new files). VirtualBox dependency. First boot latency (5-10 min). Bidirectional sync risk accepted as intentional.
-
-## 2026-02-14 - Vagrant Mode: Force skip-permissions when vagrant mode enabled
-
-**Context**: Should the user be able to disable `--dangerously-skip-permissions` while in vagrant mode?
-**Decision**: Force it on automatically. The entire purpose of vagrant mode is unrestricted access in a safe sandbox.
-**Consequences**: Simpler UX. Users who want restricted mode should not use vagrant mode.
-
-## 2026-02-14 - MCP Compatibility: VM-Aware Config Generation
-
-**Context**: MCP tools configured in agent-deck need to work inside the Vagrant VM, but `.mcp.json` references host-side resources (localhost URLs, Unix sockets, host commands).
-**Decision**: Generate a VM-specific `.mcp.json` via `WriteMCPJsonForVagrant()` that rewrites HTTP URLs (`localhost` -> `10.0.2.2`), bypasses pool sockets (STDIO fallback), and provisions npm MCP packages in the Vagrantfile. Global/user Claude configs propagated via `SyncClaudeConfig()`.
-**Consequences**: HTTP MCPs work out of the box. STDIO MCPs require npm packages installed in VM. Non-npm MCPs (python, custom binaries) need manual VM provisioning. Pool sockets always bypassed (higher memory usage per session).
-
-## 2026-02-14 - Crash Recovery: VM Health Check in UpdateStatus()
-
-**Context**: Vagrant VM can crash independently of agent-deck. Need to detect and surface VM failures.
-**Decision**: Periodic health check (60s interval) piggybacked on existing `UpdateStatus()` polling. Uses `vagrant status --machine-readable` with in-memory caching. Contextual error messages per VM state. Press R triggers state-aware recovery (resume/destroy+up/reload).
-**Consequences**: ~100-200ms overhead every 60s for vagrant sessions. Claude conversations survive VM destruction (session ID stored server-side). `vagrant resume` used for suspended VMs (5s vs 30-60s).
-
-## 2026-02-14 - Crash Recovery: agent-deck Crash is Automatic
-
-**Context**: What happens when agent-deck itself crashes while a vagrant session is running?
-**Decision**: No special handling needed. tmux session survives, VM survives, Claude survives. On restart, `ReconnectSessionLazy()` reconnects to existing tmux session. `HealthCheck()` confirms VM state on next poll.
-**Consequences**: Zero-effort recovery for agent-deck crashes. Only edge case: crash during `vagrant up` before Claude launches -- handled by restart flow detecting partial VM state.

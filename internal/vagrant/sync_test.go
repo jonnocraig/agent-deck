@@ -155,6 +155,11 @@ func TestSyncClaudeConfig_GlobalConfigExists(t *testing.T) {
 		}
 	}()
 
+	// Disable OAuth extraction for this test
+	originalOAuth := extractOAuthCredentialsFunc
+	extractOAuthCredentialsFunc = func() ([]byte, error) { return nil, ErrNoOAuthCredentials }
+	defer func() { extractOAuthCredentialsFunc = originalOAuth }()
+
 	// Create manager
 	projectPath := "/test/project"
 	manager := NewManager(projectPath, session.VagrantSettings{})
@@ -180,8 +185,12 @@ func TestSyncClaudeConfig_GlobalConfigExists(t *testing.T) {
 	for _, call := range writeCalls {
 		if call.remotePath == "~/.claude/.claude.json" {
 			found = true
-			if string(call.content) != string(globalContent) {
-				t.Errorf("global config content mismatch:\ngot:  %s\nwant: %s", string(call.content), string(globalContent))
+			// Content should have hasCompletedOnboarding injected
+			if !strings.Contains(string(call.content), "projects") {
+				t.Errorf("global config should preserve projects key, got: %s", string(call.content))
+			}
+			if !strings.Contains(string(call.content), "hasCompletedOnboarding") {
+				t.Errorf("global config should have hasCompletedOnboarding injected, got: %s", string(call.content))
 			}
 		}
 	}
@@ -206,6 +215,11 @@ func TestSyncClaudeConfig_UserConfigExists(t *testing.T) {
 	originalHome := os.Getenv("HOME")
 	os.Setenv("HOME", tempHome)
 	defer os.Setenv("HOME", originalHome)
+
+	// Disable OAuth extraction for this test
+	originalOAuth := extractOAuthCredentialsFunc
+	extractOAuthCredentialsFunc = func() ([]byte, error) { return nil, ErrNoOAuthCredentials }
+	defer func() { extractOAuthCredentialsFunc = originalOAuth }()
 
 	// Create manager
 	projectPath := "/test/project"
@@ -232,8 +246,11 @@ func TestSyncClaudeConfig_UserConfigExists(t *testing.T) {
 	for _, call := range writeCalls {
 		if call.remotePath == "~/.claude.json" {
 			found = true
-			if string(call.content) != string(userContent) {
-				t.Errorf("user config content mismatch:\ngot:  %s\nwant: %s", string(call.content), string(userContent))
+			if !strings.Contains(string(call.content), "projects") {
+				t.Errorf("user config should preserve projects, got: %s", string(call.content))
+			}
+			if !strings.Contains(string(call.content), "hasCompletedOnboarding") {
+				t.Errorf("user config should have hasCompletedOnboarding, got: %s", string(call.content))
 			}
 		}
 	}
@@ -257,6 +274,11 @@ func TestSyncClaudeConfig_NoGlobalConfig(t *testing.T) {
 			os.Unsetenv("CLAUDE_CONFIG_DIR")
 		}
 	}()
+
+	// Disable OAuth extraction for this test
+	originalOAuth := extractOAuthCredentialsFunc
+	extractOAuthCredentialsFunc = func() ([]byte, error) { return nil, ErrNoOAuthCredentials }
+	defer func() { extractOAuthCredentialsFunc = originalOAuth }()
 
 	// Create manager
 	projectPath := "/test/project"
@@ -294,6 +316,11 @@ func TestSyncClaudeConfig_NoUserConfig(t *testing.T) {
 	originalHome := os.Getenv("HOME")
 	os.Setenv("HOME", tempHome)
 	defer os.Setenv("HOME", originalHome)
+
+	// Disable OAuth extraction for this test
+	originalOAuth := extractOAuthCredentialsFunc
+	extractOAuthCredentialsFunc = func() ([]byte, error) { return nil, ErrNoOAuthCredentials }
+	defer func() { extractOAuthCredentialsFunc = originalOAuth }()
 
 	// Create manager
 	projectPath := "/test/project"
@@ -359,6 +386,11 @@ func TestSyncClaudeConfig_BothConfigs(t *testing.T) {
 		os.Setenv("HOME", originalHome)
 	}()
 
+	// Disable OAuth extraction for this test
+	originalOAuth := extractOAuthCredentialsFunc
+	extractOAuthCredentialsFunc = func() ([]byte, error) { return nil, ErrNoOAuthCredentials }
+	defer func() { extractOAuthCredentialsFunc = originalOAuth }()
+
 	// Create manager
 	projectPath := "/test/project"
 	manager := NewManager(projectPath, session.VagrantSettings{})
@@ -386,14 +418,20 @@ func TestSyncClaudeConfig_BothConfigs(t *testing.T) {
 	for _, call := range writeCalls {
 		if call.remotePath == "~/.claude/.claude.json" {
 			foundGlobal = true
-			if string(call.content) != string(globalContent) {
-				t.Errorf("global config content mismatch")
+			if !strings.Contains(string(call.content), "global") {
+				t.Errorf("global config should preserve projects, got: %s", string(call.content))
+			}
+			if !strings.Contains(string(call.content), "hasCompletedOnboarding") {
+				t.Errorf("global config should have hasCompletedOnboarding, got: %s", string(call.content))
 			}
 		}
 		if call.remotePath == "~/.claude.json" {
 			foundUser = true
-			if string(call.content) != string(userContent) {
-				t.Errorf("user config content mismatch")
+			if !strings.Contains(string(call.content), "user") {
+				t.Errorf("user config should preserve projects, got: %s", string(call.content))
+			}
+			if !strings.Contains(string(call.content), "hasCompletedOnboarding") {
+				t.Errorf("user config should have hasCompletedOnboarding, got: %s", string(call.content))
 			}
 		}
 	}
@@ -413,6 +451,11 @@ func TestSyncClaudeConfig_BothConfigs(t *testing.T) {
 
 func TestSyncClaudeConfig_SettingsAndStatusline(t *testing.T) {
 	tempHome := t.TempDir()
+
+	// Disable OAuth extraction for this test
+	originalOAuth := extractOAuthCredentialsFunc
+	extractOAuthCredentialsFunc = func() ([]byte, error) { return nil, ErrNoOAuthCredentials }
+	defer func() { extractOAuthCredentialsFunc = originalOAuth }()
 
 	// Create ~/.claude/settings.json
 	claudeDir := filepath.Join(tempHome, ".claude")
@@ -550,6 +593,11 @@ func TestStripMCPServers(t *testing.T) {
 
 func TestSyncClaudeConfig_MCPServersStripped(t *testing.T) {
 	tempHome := t.TempDir()
+
+	// Disable OAuth extraction for this test
+	originalOAuth := extractOAuthCredentialsFunc
+	extractOAuthCredentialsFunc = func() ([]byte, error) { return nil, ErrNoOAuthCredentials }
+	defer func() { extractOAuthCredentialsFunc = originalOAuth }()
 
 	// Create global config with mcpServers
 	claudeDir := filepath.Join(tempHome, ".claude")
@@ -738,6 +786,11 @@ func TestStripJSONKeys_NoChangeWhenNoKeysPresent(t *testing.T) {
 func TestSyncClaudeConfig_HostOnlyFieldsStripped(t *testing.T) {
 	tempHome := t.TempDir()
 
+	// Disable OAuth extraction for this test
+	originalOAuth := extractOAuthCredentialsFunc
+	extractOAuthCredentialsFunc = func() ([]byte, error) { return nil, ErrNoOAuthCredentials }
+	defer func() { extractOAuthCredentialsFunc = originalOAuth }()
+
 	// Create global config with host-only fields
 	claudeDir := filepath.Join(tempHome, ".claude")
 	if err := os.MkdirAll(claudeDir, 0755); err != nil {
@@ -802,6 +855,11 @@ func TestSyncClaudeConfig_HostOnlyFieldsStripped(t *testing.T) {
 func TestSyncClaudeConfig_SettingsPluginsStripped(t *testing.T) {
 	tempHome := t.TempDir()
 
+	// Disable OAuth extraction for this test
+	originalOAuth := extractOAuthCredentialsFunc
+	extractOAuthCredentialsFunc = func() ([]byte, error) { return nil, ErrNoOAuthCredentials }
+	defer func() { extractOAuthCredentialsFunc = originalOAuth }()
+
 	claudeDir := filepath.Join(tempHome, ".claude")
 	if err := os.MkdirAll(claudeDir, 0755); err != nil {
 		t.Fatalf("failed to create .claude dir: %v", err)
@@ -851,6 +909,230 @@ func TestSyncClaudeConfig_SettingsPluginsStripped(t *testing.T) {
 				t.Errorf("statusLine should be preserved in settings.json, got: %s", content)
 			}
 		}
+	}
+}
+
+func TestInjectVMFields_AddsOnboarding(t *testing.T) {
+	input := `{"projects":{}}`
+	result := injectVMFields([]byte(input))
+
+	var parsed map[string]json.RawMessage
+	if err := json.Unmarshal(result, &parsed); err != nil {
+		t.Fatalf("result is not valid JSON: %v", err)
+	}
+
+	raw, ok := parsed["hasCompletedOnboarding"]
+	if !ok {
+		t.Fatal("hasCompletedOnboarding should be present")
+	}
+	if string(raw) != "true" {
+		t.Errorf("hasCompletedOnboarding = %s, want true", string(raw))
+	}
+}
+
+func TestInjectVMFields_PreservesExistingFields(t *testing.T) {
+	input := `{"projects":{"test":{}},"numStartups":5}`
+	result := injectVMFields([]byte(input))
+
+	var parsed map[string]json.RawMessage
+	if err := json.Unmarshal(result, &parsed); err != nil {
+		t.Fatalf("result is not valid JSON: %v", err)
+	}
+
+	if _, ok := parsed["projects"]; !ok {
+		t.Error("projects should be preserved")
+	}
+	if _, ok := parsed["numStartups"]; !ok {
+		t.Error("numStartups should be preserved")
+	}
+	if _, ok := parsed["hasCompletedOnboarding"]; !ok {
+		t.Error("hasCompletedOnboarding should be injected")
+	}
+}
+
+func TestInjectVMFields_InvalidJSON(t *testing.T) {
+	input := `not valid json`
+	result := injectVMFields([]byte(input))
+	if string(result) != input {
+		t.Errorf("expected original data for invalid JSON, got: %s", string(result))
+	}
+}
+
+func TestSyncClaudeConfig_OAuthCredentialsSynced(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	// Redirect CLAUDE_CONFIG_DIR to avoid picking up real global config
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+
+	// Inject mock OAuth credentials
+	original := extractOAuthCredentialsFunc
+	extractOAuthCredentialsFunc = func() ([]byte, error) {
+		return []byte(`{"accessToken":"sk-ant-oat01-test","refreshToken":"sk-ant-ort01-test"}`), nil
+	}
+	defer func() { extractOAuthCredentialsFunc = original }()
+
+	manager := NewManager("/test/project", session.VagrantSettings{})
+
+	var writeCalls []writeFileCall
+	manager.writeFileToVMFunc = func(remotePath string, content []byte) error {
+		writeCalls = append(writeCalls, writeFileCall{remotePath: remotePath, content: content})
+		return nil
+	}
+
+	if err := manager.SyncClaudeConfig(); err != nil {
+		t.Fatalf("SyncClaudeConfig returned error: %v", err)
+	}
+
+	found := false
+	for _, call := range writeCalls {
+		if call.remotePath == "~/.claude/.credentials.json" {
+			found = true
+			if !strings.Contains(string(call.content), "sk-ant-oat01-test") {
+				t.Errorf("credentials content should contain access token, got: %s", string(call.content))
+			}
+		}
+	}
+	if !found {
+		t.Error("OAuth credentials should be synced to ~/.claude/.credentials.json")
+	}
+}
+
+func TestSyncClaudeConfig_NoOAuthGraceful(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+
+	// Inject mock that returns no credentials
+	original := extractOAuthCredentialsFunc
+	extractOAuthCredentialsFunc = func() ([]byte, error) {
+		return nil, ErrNoOAuthCredentials
+	}
+	defer func() { extractOAuthCredentialsFunc = original }()
+
+	manager := NewManager("/test/project", session.VagrantSettings{})
+
+	var writeCalls []writeFileCall
+	manager.writeFileToVMFunc = func(remotePath string, content []byte) error {
+		writeCalls = append(writeCalls, writeFileCall{remotePath: remotePath, content: content})
+		return nil
+	}
+
+	if err := manager.SyncClaudeConfig(); err != nil {
+		t.Fatalf("SyncClaudeConfig should not error when OAuth is absent: %v", err)
+	}
+
+	for _, call := range writeCalls {
+		if call.remotePath == "~/.claude/.credentials.json" {
+			t.Error("credentials should not be written when no OAuth found")
+		}
+	}
+}
+
+func TestSyncClaudeConfig_OnboardingInjected(t *testing.T) {
+	tempHome := t.TempDir()
+
+	// Create user config
+	userContent := `{"projects":{}}`
+	if err := os.WriteFile(filepath.Join(tempHome, ".claude.json"), []byte(userContent), 0600); err != nil {
+		t.Fatalf("failed to create user config: %v", err)
+	}
+
+	t.Setenv("HOME", tempHome)
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+
+	// Disable OAuth extraction for this test
+	original := extractOAuthCredentialsFunc
+	extractOAuthCredentialsFunc = func() ([]byte, error) { return nil, ErrNoOAuthCredentials }
+	defer func() { extractOAuthCredentialsFunc = original }()
+
+	manager := NewManager("/test/project", session.VagrantSettings{})
+
+	var writeCalls []writeFileCall
+	manager.writeFileToVMFunc = func(remotePath string, content []byte) error {
+		writeCalls = append(writeCalls, writeFileCall{remotePath: remotePath, content: content})
+		return nil
+	}
+
+	if err := manager.SyncClaudeConfig(); err != nil {
+		t.Fatalf("SyncClaudeConfig returned error: %v", err)
+	}
+
+	for _, call := range writeCalls {
+		if call.remotePath == "~/.claude.json" {
+			if !strings.Contains(string(call.content), "hasCompletedOnboarding") {
+				t.Errorf("user config should contain hasCompletedOnboarding, got: %s", string(call.content))
+			}
+		}
+	}
+}
+
+// TestGetVMClaudeMD verifies the CLAUDE.md content strips frontmatter and keeps the body
+func TestGetVMClaudeMD(t *testing.T) {
+	md := getVMClaudeMD()
+
+	// Should NOT contain YAML frontmatter
+	if strings.Contains(md, "---") && strings.HasPrefix(md, "---") {
+		t.Error("CLAUDE.md should not contain YAML frontmatter delimiters")
+	}
+	if strings.Contains(md, "name: operating-in-vagrant") {
+		t.Error("CLAUDE.md should not contain frontmatter name field")
+	}
+
+	// Should contain the skill body content
+	for _, keyword := range []string{
+		"Operating in a Vagrant VM",
+		"sudo",
+		"/vagrant",
+		"10.0.2.2",
+		"inotify",
+		"disposable",
+	} {
+		if !strings.Contains(md, keyword) {
+			t.Errorf("CLAUDE.md missing expected content: %q", keyword)
+		}
+	}
+}
+
+// TestSyncClaudeConfigWritesClaudeMD verifies that SyncClaudeConfig writes ~/.claude/CLAUDE.md
+func TestSyncClaudeConfigWritesClaudeMD(t *testing.T) {
+	tmpDir := t.TempDir()
+	settings := session.VagrantSettings{}
+	mgr := NewManager(tmpDir, settings)
+
+	var writeCalls []writeFileCall
+	mgr.writeFileToVMFunc = func(remotePath string, content []byte) error {
+		writeCalls = append(writeCalls, writeFileCall{remotePath: remotePath, content: content})
+		return nil
+	}
+
+	// Mock OAuth to avoid hitting real Keychain
+	origOAuth := extractOAuthCredentialsFunc
+	extractOAuthCredentialsFunc = func() ([]byte, error) { return nil, ErrNoOAuthCredentials }
+	defer func() { extractOAuthCredentialsFunc = origOAuth }()
+
+	if err := mgr.SyncClaudeConfig(); err != nil {
+		t.Fatalf("SyncClaudeConfig failed: %v", err)
+	}
+
+	var claudeMDCall *writeFileCall
+	for i, call := range writeCalls {
+		if call.remotePath == "~/.claude/CLAUDE.md" {
+			claudeMDCall = &writeCalls[i]
+			break
+		}
+	}
+
+	if claudeMDCall == nil {
+		t.Fatal("SyncClaudeConfig did not write ~/.claude/CLAUDE.md")
+	}
+
+	content := string(claudeMDCall.content)
+	if strings.Contains(content, "name: operating-in-vagrant") {
+		t.Error("CLAUDE.md should not contain YAML frontmatter")
+	}
+	if !strings.Contains(content, "Operating in a Vagrant VM") {
+		t.Error("CLAUDE.md should contain VM context instructions")
 	}
 }
 

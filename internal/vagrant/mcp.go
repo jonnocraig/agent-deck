@@ -183,8 +183,9 @@ func CollectEnvVarNames(enabledNames []string, vagrantEnv map[string]string) []s
 	availableMCPs := getAvailableMCPsFunc()
 	nameSet := make(map[string]bool)
 
-	// Always include ANTHROPIC_API_KEY
+	// Always include ANTHROPIC_API_KEY and CLAUDE_CODE_OAUTH_TOKEN
 	nameSet["ANTHROPIC_API_KEY"] = true
+	nameSet["CLAUDE_CODE_OAUTH_TOKEN"] = true
 
 	// Collect env var names from enabled MCPs
 	for _, name := range enabledNames {

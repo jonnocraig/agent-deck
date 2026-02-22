@@ -89,20 +89,28 @@ This VM is a disposable sandbox. Be bold:
 `
 }
 
-// EnsureSudoSkill writes the vagrant-sudo skill to the project's .claude/skills directory
-// and injects the credential guard hook into .claude/settings.local.json.
+// EnsureSudoSkill writes the operating-in-vagrant skill to the project's
+// .claude/skills/operating-in-vagrant/SKILL.md directory and injects
+// the credential guard hook into .claude/settings.local.json.
+// Claude Code discovers skills as directories with SKILL.md as the entrypoint.
 // This method is idempotent and will overwrite files if they already exist.
 func (m *Manager) EnsureSudoSkill() error {
-	skillsDir := filepath.Join(m.projectPath, ".claude", "skills")
-	if err := os.MkdirAll(skillsDir, 0755); err != nil {
-		return fmt.Errorf("failed to create skills directory: %w", err)
+	skillDir := filepath.Join(m.projectPath, ".claude", "skills", "operating-in-vagrant")
+	if err := os.MkdirAll(skillDir, 0755); err != nil {
+		return fmt.Errorf("failed to create skill directory: %w", err)
 	}
 
-	skillPath := filepath.Join(skillsDir, "operating-in-vagrant.md")
+	skillPath := filepath.Join(skillDir, "SKILL.md")
 	content := GetVagrantSudoSkill()
 
 	if err := os.WriteFile(skillPath, []byte(content), 0644); err != nil {
-		return fmt.Errorf("failed to write vagrant-sudo skill: %w", err)
+		return fmt.Errorf("failed to write vagrant skill: %w", err)
+	}
+
+	// Clean up legacy standalone .md file if it exists
+	for _, legacy := range []string{"operating-in-vagrant.md", "vagrant-sudo.md"} {
+		legacyPath := filepath.Join(m.projectPath, ".claude", "skills", legacy)
+		os.Remove(legacyPath)
 	}
 
 	// Inject the credential guard PreToolUse hook into settings.local.json

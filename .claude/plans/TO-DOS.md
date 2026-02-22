@@ -2,44 +2,46 @@
 
 ## In Progress
 
-- [ ] End-to-end manual testing of Vagrant mode feature (needs fresh `vagrant destroy` + `vagrant up`)
-- [ ] Kanban feature on `feat/kanban` branch (worktree at `/vagrant/worktrees/feat-kanban`)
+- [ ] **Implement user profile sync to Vagrant VM** (plan: `.claude/plans/snug-marinating-teapot.md`)
+  - [ ] Add `extractTarInVMFunc` field to Manager struct (`manager.go`)
+  - [ ] Create `internal/vagrant/sync_batch.go` — tar infrastructure with symlink dereferencing
+  - [ ] Create `internal/vagrant/sync_batch_test.go` — tar tests (7 test cases)
+  - [ ] Modify `sync.go` step 6: merge user CLAUDE.md with VM context
+  - [ ] Add steps 7-10 to `sync.go`: sync skills/commands/agents/rules via combined tar
+  - [ ] Add sync_test.go tests for CLAUDE.md merge and profile sync
+  - [ ] Rebuild binary and run full test suite
 
-## Completed This Session (2026-02-21 session 3 — host-side)
+## Completed This Session (2026-02-22 — Bug fixes + profile sync planning)
 
-- [x] Fixed: `installMethod is native` errors — added `stripHostOnlyFields()` to strip `installMethod`, `oauthAccount`
-- [x] Fixed: `22 plugins failed to install` — added `stripSettingsForVM()` to strip `enabledPlugins`, `hooks`
-- [x] Fixed: `~/.local/bin` not in PATH — added provisioning to create dir, symlink claude, update PATH
-- [x] Refactored `stripMCPServers()` → generic `stripJSONKeys()` helper
-- [x] Enhanced skill: `operating-in-vagrant` (was `vagrant-sudo`) — "Supercharged Claude" mindset, capabilities-first, host networking, Docker patterns
-- [x] Added 6 new tests for config stripping
-- [x] Updated all skill tests and e2e test for renamed skill file
+- [x] Fixed stale binary bug — OAuth code not compiled. Added CLAUDE.md rebuild rule
+- [x] Fixed skill discovery — changed from standalone `.md` to directory `SKILL.md` format
+- [x] Fixed skill pre-loading — added `~/.claude/CLAUDE.md` sync to VM via `SyncClaudeConfig()`
+- [x] Created project CLAUDE.md with rebuild-before-testing rule
+- [x] Added legacy skill file cleanup (vagrant-sudo.md, operating-in-vagrant.md)
+- [x] Added `TestEnsureSudoSkillCleansUpLegacyFiles` test
+- [x] Added `TestGetVMClaudeMD` and `TestSyncClaudeConfigWritesClaudeMD` tests
+- [x] Created and approved plan for user profile sync (`.claude/plans/snug-marinating-teapot.md`)
 
 ## Completed Previous Sessions
 
-- [x] Diagnosed and fixed MCP tools not loading inside VM (VM session)
-- [x] Created `vagrant-vm-setup` skill (SKILL.md + MCP-SETUP.md + TROUBLESHOOTING.md) (VM session)
-- [x] Installed MCP packages globally in VM, configured `.mcp.json` (VM session)
-- [x] Created worktree at `/vagrant/worktrees/feat-kanban` (VM session)
-- [x] Fixed: `internal/vagrant` package never imported — blank import in `main.go`
-- [x] Fixed: tmux commands leaking into vagrant SSH — `buildVagrantClaudeCommand()`
-- [x] Fixed: Build output going to wrong location
-- [x] Fixed: settings.json and statusline.sh not synced into VM
-- [x] Fixed: Host MCP servers failing inside VM — `stripMCPServers()`
-- [x] Added `[Vagrant]` badge to session list and preview pane
-- [x] Design document and full vagrant mode implementation (33 files, 8051 lines)
+- [x] OAuth credential forwarding (oauth.go, sync step 5, CLAUDE_CODE_OAUTH_TOKEN)
+- [x] Config stripping (stripHostOnlyFields, stripSettingsForVM, stripJSONKeys)
+- [x] PATH provisioning (~/.local/bin, claude symlink)
+- [x] Skill rewrite (operating-in-vagrant)
+- [x] MCP in VM (stripMCPServers, WriteMCPJsonForVagrant)
+- [x] buildVagrantClaudeCommand (tmux-free)
+- [x] [Vagrant] badge
+- [x] Full vagrant mode implementation (33 files, 8051 lines)
 
 ## Pending
 
-- [ ] **Commit all host-side fixes to git** (many modified files, uncommitted on main)
-- [ ] Delete existing Vagrantfile + `.vagrant/` for fresh VM test with new provisioning
-- [ ] Test with `vagrant up` from scratch to verify config stripping + PATH fixes
-- [ ] Verify `operating-in-vagrant.md` skill loads inside VM
-- [ ] Restart Claude Code inside VM to verify MCP servers load from `.mcp.json`
+- [ ] **Commit ALL changes to git** (5 sessions of uncommitted work on main)
+- [ ] Delete Vagrantfile + `.vagrant/` for fresh VM test
+- [ ] Test full profile sync inside VM (skills, commands, agents, rules visible)
 - [ ] Test VM suspend on session stop, destroy on session delete
 - [ ] Test multi-session VM sharing
-- [ ] Consider adding MCP npm packages to Vagrantfile provisioning script
-- [ ] Upgrade Node.js in VM from 18.x to 20.x (some MCP packages want 20+)
+- [ ] Upgrade Node.js in VM from 18.x to 20.x
+- [ ] Continue `feat/kanban` work in worktree
 
 ## Blocked
 

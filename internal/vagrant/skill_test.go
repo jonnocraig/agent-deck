@@ -92,8 +92,8 @@ func TestEnsureSudoSkill(t *testing.T) {
 		t.Fatalf("EnsureSudoSkill failed: %v", err)
 	}
 
-	// Verify file exists at correct path
-	skillPath := filepath.Join(tmpDir, ".claude", "skills", "operating-in-vagrant.md")
+	// Verify file exists at correct path (directory with SKILL.md)
+	skillPath := filepath.Join(tmpDir, ".claude", "skills", "operating-in-vagrant", "SKILL.md")
 	content, err := os.ReadFile(skillPath)
 	if err != nil {
 		t.Fatalf("Failed to read skill file: %v", err)
@@ -123,7 +123,7 @@ func TestEnsureSudoSkillIdempotent(t *testing.T) {
 	}
 
 	// Verify content is still correct
-	skillPath := filepath.Join(tmpDir, ".claude", "skills", "operating-in-vagrant.md")
+	skillPath := filepath.Join(tmpDir, ".claude", "skills", "operating-in-vagrant", "SKILL.md")
 	content, err := os.ReadFile(skillPath)
 	if err != nil {
 		t.Fatalf("Failed to read skill file: %v", err)
@@ -146,8 +146,8 @@ func TestEnsureSudoSkillInjectsCredentialGuard(t *testing.T) {
 		t.Fatalf("EnsureSudoSkill failed: %v", err)
 	}
 
-	// Verify skill file exists
-	skillPath := filepath.Join(tmpDir, ".claude", "skills", "operating-in-vagrant.md")
+	// Verify skill file exists (directory with SKILL.md)
+	skillPath := filepath.Join(tmpDir, ".claude", "skills", "operating-in-vagrant", "SKILL.md")
 	if _, err := os.Stat(skillPath); os.IsNotExist(err) {
 		t.Fatal("Skill file was not created")
 	}
@@ -182,6 +182,43 @@ func TestEnsureSudoSkillInjectsCredentialGuard(t *testing.T) {
 	matcher, ok := hookEntry["matcher"].(string)
 	if !ok || matcher != "Read|View|Cat" {
 		t.Errorf("Expected matcher 'Read|View|Cat', got %q", matcher)
+	}
+}
+
+// TestEnsureSudoSkillCleansUpLegacyFiles verifies that old standalone .md files
+// are removed when the new directory-based skill is written.
+func TestEnsureSudoSkillCleansUpLegacyFiles(t *testing.T) {
+	tmpDir := t.TempDir()
+	skillsDir := filepath.Join(tmpDir, ".claude", "skills")
+	if err := os.MkdirAll(skillsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create legacy files
+	for _, name := range []string{"operating-in-vagrant.md", "vagrant-sudo.md"} {
+		if err := os.WriteFile(filepath.Join(skillsDir, name), []byte("old"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	settings := session.VagrantSettings{}
+	mgr := NewManager(tmpDir, settings)
+
+	if err := mgr.EnsureSudoSkill(); err != nil {
+		t.Fatalf("EnsureSudoSkill failed: %v", err)
+	}
+
+	// Verify legacy files are gone
+	for _, name := range []string{"operating-in-vagrant.md", "vagrant-sudo.md"} {
+		if _, err := os.Stat(filepath.Join(skillsDir, name)); !os.IsNotExist(err) {
+			t.Errorf("Legacy file %s should have been removed", name)
+		}
+	}
+
+	// Verify new SKILL.md exists
+	newPath := filepath.Join(skillsDir, "operating-in-vagrant", "SKILL.md")
+	if _, err := os.Stat(newPath); os.IsNotExist(err) {
+		t.Fatal("New SKILL.md was not created")
 	}
 }
 

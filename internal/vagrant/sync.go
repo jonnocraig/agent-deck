@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/asheshgoplani/agent-deck/internal/session"
 )
@@ -21,6 +22,8 @@ import (
 // 2. User config: ~/.claude.json
 // 3. Settings: ~/.claude/settings.json (statusLine, plugins, preferences)
 // 4. Additional files referenced by settings (e.g. statusline.sh)
+// 5. OAuth credentials (~/.claude/.credentials.json)
+// 6. VM context as ~/.claude/CLAUDE.md (pre-loaded on every session start)
 //
 // All files are copied into the VM at their respective paths. If a file doesn't
 // exist, it's silently skipped (not an error). Errors during sync are logged but
@@ -38,6 +41,7 @@ func (m *Manager) SyncClaudeConfig() error {
 
 	if data, err := os.ReadFile(globalConfig); err == nil {
 		stripped := stripHostOnlyFields(data)
+		stripped = injectVMFields(stripped)
 		if err := writeFunc("~/.claude/.claude.json", stripped); err != nil {
 			// Non-fatal: continue even if sync fails
 		}
@@ -52,6 +56,7 @@ func (m *Manager) SyncClaudeConfig() error {
 	userConfig := filepath.Join(homeDir, ".claude.json")
 	if data, err := os.ReadFile(userConfig); err == nil {
 		stripped := stripHostOnlyFields(data)
+		stripped = injectVMFields(stripped)
 		if err := writeFunc("~/.claude.json", stripped); err != nil {
 			// Non-fatal
 		}
@@ -83,7 +88,40 @@ func (m *Manager) SyncClaudeConfig() error {
 		}
 	}
 
+	// 5. Sync OAuth credentials into VM
+	if credData, err := extractOAuthCredentialsFunc(); err == nil {
+		if err := writeFunc("~/.claude/.credentials.json", credData); err != nil {
+			// Non-fatal
+		} else {
+			// Restrict permissions on credentials file
+			chmodCmd := m.vagrantCmd("ssh", "-c", "chmod 600 ~/.claude/.credentials.json")
+			_ = chmodCmd.Run()
+		}
+	}
+
+	// 6. Write user-level CLAUDE.md with VM context so it's pre-loaded on session start.
+	// Skills are lazy-loaded (descriptions in context, full content only when invoked).
+	// CLAUDE.md is always loaded in full, ensuring Claude has VM instructions immediately.
+	claudeMD := getVMClaudeMD()
+	if err := writeFunc("~/.claude/CLAUDE.md", []byte(claudeMD)); err != nil {
+		// Non-fatal
+	}
+
 	return nil
+}
+
+// getVMClaudeMD returns the content for ~/.claude/CLAUDE.md inside the VM.
+// This extracts the body of the operating-in-vagrant skill (stripping YAML
+// frontmatter) so the VM context is pre-loaded on every Claude Code session
+// without requiring the user to invoke the skill.
+func getVMClaudeMD() string {
+	skill := GetVagrantSudoSkill()
+	// Strip YAML frontmatter (content between first pair of "---" lines)
+	parts := strings.SplitN(skill, "---", 3)
+	if len(parts) == 3 {
+		return strings.TrimSpace(parts[2])
+	}
+	return skill
 }
 
 // stripMCPServers removes the "mcpServers" key from a JSON config file.
@@ -113,6 +151,23 @@ func stripHostOnlyFields(data []byte) []byte {
 //   - hooks: hook commands may reference host-side binaries or paths
 func stripSettingsForVM(data []byte) []byte {
 	return stripJSONKeys(data, []string{"enabledPlugins", "hooks"})
+}
+
+// injectVMFields adds VM-specific fields to a Claude config JSON object.
+// Currently injects hasCompletedOnboarding: true so Claude Code skips the
+// onboarding flow inside the VM.
+// Returns the original data unchanged if parsing fails.
+func injectVMFields(data []byte) []byte {
+	var config map[string]json.RawMessage
+	if err := json.Unmarshal(data, &config); err != nil {
+		return data
+	}
+	config["hasCompletedOnboarding"] = json.RawMessage("true")
+	result, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return data
+	}
+	return result
 }
 
 // stripJSONKeys removes the specified keys from a JSON object.

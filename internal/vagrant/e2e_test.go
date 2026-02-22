@@ -80,8 +80,8 @@ func TestE2EVagrantLifecycle(t *testing.T) {
 			t.Fatalf("EnsureSudoSkill failed: %v", err)
 		}
 
-		// Verify skill file with frontmatter
-		skillPath := filepath.Join(projectDir, ".claude", "skills", "operating-in-vagrant.md")
+		// Verify skill directory with SKILL.md (Claude Code discovery format)
+		skillPath := filepath.Join(projectDir, ".claude", "skills", "operating-in-vagrant", "SKILL.md")
 		skillData, err := os.ReadFile(skillPath)
 		if err != nil {
 			t.Fatalf("Skill file not created: %v", err)
