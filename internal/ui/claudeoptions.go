@@ -19,6 +19,9 @@ type ClaudeOptionsPanel struct {
 	allowSkipPermissions bool
 	useChrome            bool
 	useTeammateMode      bool
+	useVagrantMode       bool
+	// Track previous skip permissions state for restore on vagrant toggle off
+	prevSkipPermissions bool
 	// Focus tracking
 	focusIndex int
 	// Whether this panel is for fork dialog (fewer options)
@@ -48,7 +51,7 @@ func NewClaudeOptionsPanel() *ClaudeOptionsPanel {
 		sessionMode:   0, // new
 		resumeIDInput: resumeInput,
 		isForkMode:    false,
-		focusCount:    5, // Will adjust dynamically
+		focusCount:    6, // Will adjust dynamically
 	}
 }
 
@@ -58,7 +61,7 @@ func NewClaudeOptionsPanelForFork() *ClaudeOptionsPanel {
 		sessionMode:   0,
 		resumeIDInput: textinput.New(), // Not used in fork mode
 		isForkMode:    true,
-		focusCount:    3, // skip, chrome, teammate
+		focusCount:    4, // skip, chrome, teammate, vagrant
 	}
 }
 
@@ -99,6 +102,7 @@ func (p *ClaudeOptionsPanel) GetOptions() *session.ClaudeOptions {
 		AllowSkipPermissions: p.allowSkipPermissions,
 		UseChrome:            p.useChrome,
 		UseTeammateMode:      p.useTeammateMode,
+		UseVagrantMode:       p.useVagrantMode,
 	}
 
 	if !p.isForkMode {
@@ -190,6 +194,17 @@ func (p *ClaudeOptionsPanel) handleSpaceKey() {
 			p.useChrome = !p.useChrome
 		case 2:
 			p.useTeammateMode = !p.useTeammateMode
+		case 3:
+			// Vagrant mode toggle
+			p.useVagrantMode = !p.useVagrantMode
+			if p.useVagrantMode {
+				// Save current skip permissions state and force it on
+				p.prevSkipPermissions = p.skipPermissions
+				p.skipPermissions = true
+			} else {
+				// Restore previous skip permissions state
+				p.skipPermissions = p.prevSkipPermissions
+			}
 		}
 	} else {
 		// NewDialog mode
@@ -203,6 +218,17 @@ func (p *ClaudeOptionsPanel) handleSpaceKey() {
 			p.useChrome = !p.useChrome
 		case "teammateMode":
 			p.useTeammateMode = !p.useTeammateMode
+		case "vagrantMode":
+			// Vagrant mode toggle
+			p.useVagrantMode = !p.useVagrantMode
+			if p.useVagrantMode {
+				// Save current skip permissions state and force it on
+				p.prevSkipPermissions = p.skipPermissions
+				p.skipPermissions = true
+			} else {
+				// Restore previous skip permissions state
+				p.skipPermissions = p.prevSkipPermissions
+			}
 		}
 	}
 }
@@ -217,6 +243,8 @@ func (p *ClaudeOptionsPanel) getFocusType() string {
 			return "chrome"
 		case 2:
 			return "teammateMode"
+		case 3:
+			return "vagrantMode"
 		}
 	} else {
 		idx := p.focusIndex
@@ -243,6 +271,10 @@ func (p *ClaudeOptionsPanel) getFocusType() string {
 		if idx == 3 {
 			return "teammateMode"
 		}
+		// 5: vagrant mode
+		if idx == 4 {
+			return "vagrantMode"
+		}
 	}
 	return ""
 }
@@ -250,10 +282,10 @@ func (p *ClaudeOptionsPanel) getFocusType() string {
 // getFocusCount returns the number of focusable elements
 func (p *ClaudeOptionsPanel) getFocusCount() int {
 	if p.isForkMode {
-		return 3 // skip, chrome, teammate
+		return 4 // skip, chrome, teammate, vagrant
 	}
 
-	count := 4 // session mode, skip, chrome, teammate
+	count := 5 // session mode, skip, chrome, teammate, vagrant
 	if p.sessionMode == 2 {
 		count++ // resume input
 	}
@@ -299,6 +331,7 @@ func (p *ClaudeOptionsPanel) viewForkMode(labelStyle, activeStyle, dimStyle, hea
 	content += renderCheckboxLine("Skip permissions", p.skipPermissions, p.focusIndex == 0)
 	content += renderCheckboxLine("Chrome mode", p.useChrome, p.focusIndex == 1)
 	content += renderCheckboxLine("Teammate mode", p.useTeammateMode, p.focusIndex == 2)
+	content += renderCheckboxLine("Just do it (vagrant sudo)", p.useVagrantMode, p.focusIndex == 3)
 	return content
 }
 
@@ -339,6 +372,10 @@ func (p *ClaudeOptionsPanel) viewNewMode(labelStyle, activeStyle, dimStyle, head
 
 	// Teammate mode checkbox
 	content += renderCheckboxLine("Teammate mode", p.useTeammateMode, p.focusIndex == focusIdx)
+	focusIdx++
+
+	// Vagrant mode checkbox
+	content += renderCheckboxLine("Just do it (vagrant sudo)", p.useVagrantMode, p.focusIndex == focusIdx)
 
 	return content
 }

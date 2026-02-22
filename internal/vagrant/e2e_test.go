@@ -81,7 +81,7 @@ func TestE2EVagrantLifecycle(t *testing.T) {
 		}
 
 		// Verify skill file with frontmatter
-		skillPath := filepath.Join(projectDir, ".claude", "skills", "vagrant-sudo.md")
+		skillPath := filepath.Join(projectDir, ".claude", "skills", "operating-in-vagrant.md")
 		skillData, err := os.ReadFile(skillPath)
 		if err != nil {
 			t.Fatalf("Skill file not created: %v", err)
@@ -91,7 +91,7 @@ func TestE2EVagrantLifecycle(t *testing.T) {
 		if !strings.HasPrefix(skillContent, "---\n") {
 			t.Error("Skill missing YAML frontmatter")
 		}
-		if !strings.Contains(skillContent, "name: vagrant-sudo") {
+		if !strings.Contains(skillContent, "name: operating-in-vagrant") {
 			t.Error("Skill frontmatter missing name field")
 		}
 		if !strings.Contains(skillContent, "Ubuntu 24.04") {

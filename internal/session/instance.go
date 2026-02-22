@@ -3971,10 +3971,46 @@ func (i *Instance) applyVagrantWrapper(command string) (string, error) {
 	envVarNames := i.vagrantProvider.CollectEnvVarNames(enabledNames, settings.Env)
 	tunnelPorts := i.vagrantProvider.CollectTunnelPorts(enabledNames)
 
-	// 10. Wrap command for execution inside VM
-	wrappedCmd := i.vagrantProvider.WrapCommand(command, envVarNames, tunnelPorts)
+	// 10. Build a simplified command for VM execution.
+	// The pre-built command from buildClaudeCommand contains host-side tmux calls
+	// (e.g. "tmux set-environment CLAUDE_SESSION_ID ...") that fail inside the VM
+	// because there is no tmux server there. Replace with a clean command.
+	vmCommand := i.buildVagrantClaudeCommand(command)
+
+	// 11. Wrap command for execution inside VM
+	wrappedCmd := i.vagrantProvider.WrapCommand(vmCommand, envVarNames, tunnelPorts)
 
 	return wrappedCmd, nil
+}
+
+// buildVagrantClaudeCommand builds a simplified Claude command for execution inside
+// the Vagrant VM. The normal buildClaudeCommand output contains host-side tmux calls
+// (e.g. "tmux set-environment CLAUDE_SESSION_ID ...") that fail inside the VM because
+// there is no tmux server running there. This method produces a clean command:
+//
+//	session_id=$(uuidgen | tr '[:upper:]' '[:lower:]'); export CLAUDE_SESSION_ID="$session_id"; claude --session-id "$session_id" [flags]
+//
+// For non-Claude tools, the original command is returned unmodified.
+func (i *Instance) buildVagrantClaudeCommand(originalCommand string) string {
+	if i.Tool != "claude" {
+		return originalCommand
+	}
+
+	opts := i.GetClaudeOptions()
+	if opts == nil {
+		userConfig, _ := LoadUserConfig()
+		opts = NewClaudeOptions(userConfig)
+	}
+
+	extraFlags := i.buildClaudeExtraFlags(opts)
+
+	// Build a clean command: generate session ID, export it (no tmux), launch claude
+	return fmt.Sprintf(
+		`session_id=$(uuidgen | tr '[:upper:]' '[:lower:]'); `+
+			`export CLAUDE_SESSION_ID="$session_id"; `+
+			`export AGENTDECK_INSTANCE_ID=%s; `+
+			`claude --session-id "$session_id"%s`,
+		i.ID, extraFlags)
 }
 
 // stopVagrant suspends the VM in a goroutine, signaling vmOpDone on completion.

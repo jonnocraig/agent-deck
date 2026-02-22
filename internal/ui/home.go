@@ -7076,10 +7076,20 @@ func (h *Home) renderSessionItem(b *strings.Builder, item session.Item, selected
 		worktreeBadge = wtStyle.Render(" [" + branch + "]")
 	}
 
-	// Build row: [baseIndent][selection][tree][status] [title] [tool] [yolo] [worktree]
+	// Vagrant mode badge
+	vagrantBadge := ""
+	if inst.IsVagrantMode() {
+		vStyle := lipgloss.NewStyle().Foreground(ColorBlue).Bold(true)
+		if selected {
+			vStyle = SessionStatusSelStyle
+		}
+		vagrantBadge = vStyle.Render(" [Vagrant]")
+	}
+
+	// Build row: [baseIndent][selection][tree][status] [title] [tool] [yolo] [worktree] [vagrant]
 	// Format: " ├─ ● session-name tool" or "▶└─ ● session-name tool"
 	// Sub-sessions get extra indent: "   ├─◐ sub-session tool"
-	row := fmt.Sprintf("%s%s%s %s %s%s%s%s", baseIndent, selectionPrefix, treeStyle.Render(treeConnector), status, title, tool, yoloBadge, worktreeBadge)
+	row := fmt.Sprintf("%s%s%s %s %s%s%s%s%s", baseIndent, selectionPrefix, treeStyle.Render(treeConnector), status, title, tool, yoloBadge, worktreeBadge, vagrantBadge)
 	b.WriteString(row)
 	b.WriteString("\n")
 }
@@ -7462,6 +7472,15 @@ func (h *Home) renderPreviewPane(width, height int) string {
 	b.WriteString(toolBadge)
 	b.WriteString(" ")
 	b.WriteString(groupBadge)
+	if selected.IsVagrantMode() {
+		vagrantBadge := lipgloss.NewStyle().
+			Foreground(ColorBg).
+			Background(ColorBlue).
+			Padding(0, 1).
+			Render("Vagrant")
+		b.WriteString(" ")
+		b.WriteString(vagrantBadge)
+	}
 	b.WriteString("\n")
 
 	// Worktree info section (for sessions running in git worktrees)

@@ -19,13 +19,17 @@ func TestGetVagrantSudoSkill(t *testing.T) {
 		t.Fatal("GetVagrantSudoSkill returned empty string")
 	}
 
-	// Check for key concepts
+	// Check for key concepts from the enhanced "operating-in-vagrant" skill
 	requiredKeywords := []string{
 		"sudo",
 		"/vagrant",
 		"Ubuntu 24.04",
 		"Docker",
 		"isolated",
+		"10.0.2.2",       // host access via NAT gateway
+		"disposable",      // ephemeral mindset
+		"Be bold",         // supercharged mindset
+		"unrestricted",    // full capabilities
 	}
 
 	for _, keyword := range requiredKeywords {
@@ -45,7 +49,7 @@ func TestSudoSkillMentionsInotify(t *testing.T) {
 	}
 
 	// Should mention polling mode solutions
-	pollingKeywords := []string{"CHOKIDAR_USEPOLLING", "WATCHPACK_POLLING", "--poll"}
+	pollingKeywords := []string{"CHOKIDAR_USEPOLLING", "WATCHPACK_POLLING", "fallbackPolling"}
 	foundPolling := false
 	for _, keyword := range pollingKeywords {
 		if strings.Contains(skill, keyword) {
@@ -54,7 +58,7 @@ func TestSudoSkillMentionsInotify(t *testing.T) {
 		}
 	}
 	if !foundPolling {
-		t.Error("Skill should mention polling mode solutions (CHOKIDAR_USEPOLLING, WATCHPACK_POLLING, or --poll)")
+		t.Error("Skill should mention polling mode solutions (CHOKIDAR_USEPOLLING, WATCHPACK_POLLING, or fallbackPolling)")
 	}
 }
 
@@ -89,7 +93,7 @@ func TestEnsureSudoSkill(t *testing.T) {
 	}
 
 	// Verify file exists at correct path
-	skillPath := filepath.Join(tmpDir, ".claude", "skills", "vagrant-sudo.md")
+	skillPath := filepath.Join(tmpDir, ".claude", "skills", "operating-in-vagrant.md")
 	content, err := os.ReadFile(skillPath)
 	if err != nil {
 		t.Fatalf("Failed to read skill file: %v", err)
@@ -119,7 +123,7 @@ func TestEnsureSudoSkillIdempotent(t *testing.T) {
 	}
 
 	// Verify content is still correct
-	skillPath := filepath.Join(tmpDir, ".claude", "skills", "vagrant-sudo.md")
+	skillPath := filepath.Join(tmpDir, ".claude", "skills", "operating-in-vagrant.md")
 	content, err := os.ReadFile(skillPath)
 	if err != nil {
 		t.Fatalf("Failed to read skill file: %v", err)
@@ -143,7 +147,7 @@ func TestEnsureSudoSkillInjectsCredentialGuard(t *testing.T) {
 	}
 
 	// Verify skill file exists
-	skillPath := filepath.Join(tmpDir, ".claude", "skills", "vagrant-sudo.md")
+	skillPath := filepath.Join(tmpDir, ".claude", "skills", "operating-in-vagrant.md")
 	if _, err := os.Stat(skillPath); os.IsNotExist(err) {
 		t.Fatal("Skill file was not created")
 	}
@@ -190,8 +194,8 @@ func TestEnsureSudoSkillHasFrontmatter(t *testing.T) {
 		t.Fatal("Skill should start with YAML frontmatter delimiter '---'")
 	}
 
-	if !strings.Contains(skill, "name: vagrant-sudo") {
-		t.Error("Skill frontmatter should contain 'name: vagrant-sudo'")
+	if !strings.Contains(skill, "name: operating-in-vagrant") {
+		t.Error("Skill frontmatter should contain 'name: operating-in-vagrant'")
 	}
 
 	if !strings.Contains(skill, "description:") {

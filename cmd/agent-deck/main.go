@@ -27,6 +27,7 @@ import (
 	"github.com/asheshgoplani/agent-deck/internal/statedb"
 	"github.com/asheshgoplani/agent-deck/internal/ui"
 	"github.com/asheshgoplani/agent-deck/internal/update"
+	_ "github.com/asheshgoplani/agent-deck/internal/vagrant"
 	"github.com/asheshgoplani/agent-deck/internal/web"
 )
 
