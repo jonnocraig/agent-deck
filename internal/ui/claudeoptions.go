@@ -331,7 +331,7 @@ func (p *ClaudeOptionsPanel) viewForkMode(labelStyle, activeStyle, dimStyle, hea
 	content += renderCheckboxLine("Skip permissions", p.skipPermissions, p.focusIndex == 0)
 	content += renderCheckboxLine("Chrome mode", p.useChrome, p.focusIndex == 1)
 	content += renderCheckboxLine("Teammate mode", p.useTeammateMode, p.focusIndex == 2)
-	content += renderCheckboxLine("Just do it (vagrant sudo)", p.useVagrantMode, p.focusIndex == 3)
+	content += renderCheckboxLine("YOLO (sudo perms inside Vagrant VM)", p.useVagrantMode, p.focusIndex == 3)
 	return content
 }
 
@@ -375,7 +375,7 @@ func (p *ClaudeOptionsPanel) viewNewMode(labelStyle, activeStyle, dimStyle, head
 	focusIdx++
 
 	// Vagrant mode checkbox
-	content += renderCheckboxLine("Just do it (vagrant sudo)", p.useVagrantMode, p.focusIndex == focusIdx)
+	content += renderCheckboxLine("YOLO (sudo perms inside Vagrant VM)", p.useVagrantMode, p.focusIndex == focusIdx)
 
 	return content
 }
