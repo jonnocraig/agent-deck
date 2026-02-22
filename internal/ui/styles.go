@@ -22,7 +22,7 @@ var currentTheme Theme = ThemeDark
 var darkColors = struct {
 	Bg, Surface, Border, Text, TextDim  lipgloss.Color
 	Accent, Purple, Cyan, Green, Yellow lipgloss.Color
-	Orange, Red, Comment                lipgloss.Color
+	Orange, Red, Blue, Comment          lipgloss.Color
 }{
 	Bg:      lipgloss.Color("#1a1b26"),
 	Surface: lipgloss.Color("#24283b"),
@@ -36,6 +36,7 @@ var darkColors = struct {
 	Yellow:  lipgloss.Color("#e0af68"),
 	Orange:  lipgloss.Color("#ff9e64"),
 	Red:     lipgloss.Color("#f7768e"),
+	Blue:    lipgloss.Color("#2ac3de"),
 	Comment: lipgloss.Color("#787fa0"),
 }
 
@@ -43,7 +44,7 @@ var darkColors = struct {
 var lightColors = struct {
 	Bg, Surface, Border, Text, TextDim  lipgloss.Color
 	Accent, Purple, Cyan, Green, Yellow lipgloss.Color
-	Orange, Red, Comment                lipgloss.Color
+	Orange, Red, Blue, Comment          lipgloss.Color
 }{
 	Bg:      lipgloss.Color("#d5d6db"),
 	Surface: lipgloss.Color("#e9e9ec"),
@@ -57,6 +58,7 @@ var lightColors = struct {
 	Yellow:  lipgloss.Color("#8f5e15"),
 	Orange:  lipgloss.Color("#965027"),
 	Red:     lipgloss.Color("#8c4351"),
+	Blue:    lipgloss.Color("#166775"),
 	Comment: lipgloss.Color("#6a6d7c"),
 }
 
@@ -74,6 +76,7 @@ var (
 	ColorYellow  lipgloss.Color
 	ColorOrange  lipgloss.Color
 	ColorRed     lipgloss.Color
+	ColorBlue    lipgloss.Color
 	ColorComment lipgloss.Color
 )
 
@@ -100,6 +103,7 @@ func InitTheme(theme string) {
 		ColorYellow = lightColors.Yellow
 		ColorOrange = lightColors.Orange
 		ColorRed = lightColors.Red
+		ColorBlue = lightColors.Blue
 		ColorComment = lightColors.Comment
 	} else {
 		currentTheme = ThemeDark
@@ -115,6 +119,7 @@ func InitTheme(theme string) {
 		ColorYellow = darkColors.Yellow
 		ColorOrange = darkColors.Orange
 		ColorRed = darkColors.Red
+		ColorBlue = darkColors.Blue
 		ColorComment = darkColors.Comment
 	}
 	// Reinitialize styles with new colors

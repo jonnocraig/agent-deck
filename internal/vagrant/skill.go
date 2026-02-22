@@ -7,74 +7,85 @@ import (
 	"path/filepath"
 )
 
-// GetVagrantSudoSkill returns the markdown content for the vagrant-sudo skill.
-// This skill informs Claude that it's running in an isolated Ubuntu VM with sudo access.
+// GetVagrantSudoSkill returns the markdown content for the operating-in-vagrant skill.
+// This skill tells Claude it's in an isolated VM with full sudo/Docker access and should
+// act boldly — the VM is a disposable sandbox. Follows Claude skill best practices:
+// concise (assumes Claude knows Linux/Docker), actionable (capabilities first), and
+// includes the critical constraints (inotify, credentials).
 func GetVagrantSudoSkill() string {
 	return `---
-name: vagrant-sudo
-description: Guidelines for running Claude Code inside an isolated Vagrant VM with sudo access. Loaded automatically when a vagrant-mode session starts.
+name: operating-in-vagrant
+description: Provides context for operating Claude Code inside an isolated Vagrant VM with full sudo, Docker, and unrestricted permissions. Covers capabilities, networking, file system constraints, and credential safety. Loaded automatically for vagrant-mode sessions.
 ---
 
-# Vagrant Sudo Skill
+# Operating in a Vagrant VM
 
-You are running in an isolated Ubuntu 24.04 LTS virtual machine with sudo access.
+You are running inside an isolated Ubuntu 24.04 virtual machine with ` + "`--dangerously-skip-permissions`" + `.
+This is intentional — the VM provides isolation, so you have full freedom to act.
 
-## VM Environment
+## Capabilities
 
-- **Operating System**: Ubuntu 24.04 LTS (Jammy Jellyfish)
-- **Privileges**: Full sudo access available
-- **Pre-installed Tools**: Docker, Node.js, Git, build-essential, curl, wget
-- **Project Location**: /vagrant (synced to host machine)
-- **Isolation**: This VM can be destroyed and recreated at any time
+You have **unrestricted access**:
+- ` + "`sudo`" + ` without password for any command
+- Install system packages: ` + "`sudo apt-get install -y <pkg>`" + `
+- Run Docker containers: ` + "`docker run ...`" + ` (user is in docker group)
+- Modify any system config under ` + "`/etc/`" + `
+- Listen on any port, create users, change permissions
+- Install global packages: ` + "`npm install -g`" + `, ` + "`pip install`" + `, ` + "`cargo install`" + `
 
-## Important Constraints
+## Environment
 
-### File Watchers (inotify) DO NOT WORK
+| | |
+|---|---|
+| OS | Ubuntu 24.04 LTS |
+| Project | ` + "`/vagrant`" + ` (bidirectional sync with host) |
+| Host access | ` + "`10.0.2.2`" + ` (VirtualBox NAT gateway) |
+| Pre-installed | Docker, Node.js, npm, Git, build-essential, curl |
+| Privileges | Full sudo, no password required |
 
-File watchers (inotify) **do NOT work** on /vagrant with VirtualBox shared folders. Always use polling mode:
+## Constraints
 
-- **Webpack/Vite**: Set ` + "`CHOKIDAR_USEPOLLING=1`" + ` environment variable
-- **Next.js**: Set ` + "`WATCHPACK_POLLING=true`" + ` environment variable
-- **TypeScript**: Use ` + "`tsc --watch --poll`" + ` flag for watch mode
-- **Alternative**: Switch to NFS shared folders (` + "`synced_folder_type = \"nfs\"`" + ` in Vagrantfile) for native inotify support
+### VirtualBox shared folders break inotify
 
-### Credential Files - NEVER READ OR TRANSMIT
-
-**NEVER** read, cat, print, log, or transmit credential files:
-- .env, .env.local, .env.production
-- .npmrc, .yarnrc
-- credentials.json, service-account.json
-- *.pem, *.key, *.crt (private keys/certs)
-- id_rsa, id_ed25519 (SSH keys)
-- .netrc, .docker/config.json
-- .aws/credentials, .gcloud/credentials
-
-**Use environment variables for secrets** - they are forwarded via SSH.
-If you need a secret, ask the user to add it to ` + "`[vagrant.env]`" + ` section in config.toml.
-
-## Best Practices
-
-1. **Use Docker for services** when possible (databases, Redis, etc.)
-2. **Install system packages** with ` + "`sudo apt-get install`" + ` when needed
-3. **Changes in /vagrant are reflected on the host** - no need to sync
-4. **VM is ephemeral** - don't store important data outside /vagrant
-5. **Use polling mode** for any file watchers (webpack, vite, tsc --watch)
-
-## Example Commands
+File watchers do not work on ` + "`/vagrant`" + `. Always use polling:
 
 ` + "```bash" + `
-# Install a system package
-sudo apt-get update && sudo apt-get install -y postgresql-client
-
-# Run a Docker container
-sudo docker run -d -p 5432:5432 -e POSTGRES_PASSWORD=dev postgres:16
-
-# Start a dev server with polling (Next.js example)
-WATCHPACK_POLLING=true npm run dev
-
-# TypeScript watch mode with polling
-tsc --watch --poll
+CHOKIDAR_USEPOLLING=1 npm run dev          # Webpack/Vite
+WATCHPACK_POLLING=true npm run dev          # Next.js
+tsc --watch --watchFile useFsEvents --fallbackPolling fixedInterval  # TypeScript
 ` + "```" + `
+
+### NEVER read credential files
+
+Do not read, cat, or log: ` + "`.env*`, `.npmrc`, `credentials.json`, `*.pem`, `*.key`, `id_rsa*`, `.netrc`, `.aws/credentials`, `.docker/config.json`" + `.
+
+Secrets are available via environment variables forwarded through SSH.
+If you need a secret, ask the user to set it in ` + "`[vagrant.env]`" + ` in their agent-deck config.
+
+## Common Patterns
+
+` + "```bash" + `
+# Database
+docker run -d --name pg -p 5432:5432 -e POSTGRES_PASSWORD=dev postgres:16
+
+# Redis
+docker run -d --name redis -p 6379:6379 redis:7-alpine
+
+# System dependencies
+sudo apt-get update && sudo apt-get install -y postgresql-client redis-tools jq
+
+# Access host machine services
+curl http://10.0.2.2:3000/api/health
+` + "```" + `
+
+## Mindset
+
+This VM is a disposable sandbox. Be bold:
+- Try approaches that would be risky on a real machine
+- Install packages and experiment freely
+- If something breaks, the VM can be destroyed and rebuilt
+- Focus on solving the task, not protecting the environment
+- Changes in ` + "`/vagrant`" + ` persist on the host — everything else is ephemeral
 `
 }
 
@@ -87,7 +98,7 @@ func (m *Manager) EnsureSudoSkill() error {
 		return fmt.Errorf("failed to create skills directory: %w", err)
 	}
 
-	skillPath := filepath.Join(skillsDir, "vagrant-sudo.md")
+	skillPath := filepath.Join(skillsDir, "operating-in-vagrant.md")
 	content := GetVagrantSudoSkill()
 
 	if err := os.WriteFile(skillPath, []byte(content), 0644); err != nil {

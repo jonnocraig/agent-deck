@@ -1,55 +1,76 @@
-# Session Handoff - 2026-02-14
+# Session Handoff - 2026-02-21 04:30
 
-## What Was Accomplished
+## What Was Accomplished (This Session — Host-Side)
 
-- Diagnosed skill scoping issue (project-local vs global `~/.claude/skills/`)
-- Copied 3 agentic-ai skills globally and pushed to skeleton repo on `feature/agentic-ai-skills` branch
-- Ran full multi-perspective brainstorm (4 parallel agents) for Vagrant mode feature
-- Wrote comprehensive design document (621 lines) at `docs/plans/2026-02-14-vagrant-mode-design.md`
-- Design covers: UI checkbox, VM lifecycle, command wrapping, Vagrantfile generation, static skill
-- Added MCP compatibility section: URL rewrite, STDIO provisioning, global config propagation
-- Added crash recovery section: VM health check, restart flow, agent-deck crash recovery, contextual error messages
-- Copied `restart.md` and `catchup.md` commands to `.claude/commands/`
+- Fixed 4 config sync bugs from Vagrant VM testing screenshots (installMethod, plugins, PATH, OAuth)
+- Rewrote `operating-in-vagrant` skill following "Supercharged Claude" blog post + Anthropic skill best practices
+- Added generic `stripJSONKeys()` helper, `stripHostOnlyFields()`, `stripSettingsForVM()`
+- Added Vagrantfile provisioning for `~/.local/bin` + claude symlink + PATH
+- Added 6 new tests, updated all skill/e2e tests
+- All vagrant tests pass (81s suite), binary builds clean
+
+## What Was Accomplished (Previous VM Session)
+
+- Created `vagrant-vm-setup` skill (SKILL.md + MCP-SETUP.md + TROUBLESHOOTING.md)
+- Installed MCP packages globally in VM (memory, sequential-thinking, filesystem)
+- Configured `/vagrant/.mcp.json` with working STDIO-based MCP servers
+- Created worktree at `/vagrant/worktrees/feat-kanban` on `feat/kanban` branch
+
+## Files Modified This Session (Host-Side)
+
+| File | Change |
+|------|--------|
+| `internal/vagrant/sync.go` | Added `stripHostOnlyFields()`, `stripSettingsForVM()`, refactored to `stripJSONKeys()` |
+| `internal/vagrant/sync_test.go` | Added 6 new tests for config stripping functions |
+| `internal/vagrant/vagrantfile.go` | Added `~/.local/bin` creation, claude symlink, PATH setup to provisioning |
+| `internal/vagrant/skill.go` | Rewrote skill as `operating-in-vagrant` with capabilities-first mindset |
+| `internal/vagrant/skill_test.go` | Updated tests for new skill content, filename, frontmatter |
+| `internal/vagrant/e2e_test.go` | Updated skill filename and name assertions |
+
+## Also Modified from Earlier Sessions (Still Uncommitted)
+
+| File | Change |
+|------|--------|
+| `cmd/agent-deck/main.go` | Blank import for vagrant provider |
+| `internal/session/instance.go` | `buildVagrantClaudeCommand()` |
+| `internal/ui/claudeoptions.go` | Claude options changes |
+| `internal/ui/home.go` | `[Vagrant]` badge |
+| `internal/ui/styles.go` | `ColorBlue` in theme |
 
 ## Current State
 
-- Branch: `feature/teammate-mode`
-- Feature: Vagrant Mode ("Just Do It") -- design phase complete
-- Status: Design document finalized, ready for implementation planning
-
-## Open Issues
-
-- Skeleton repo PR not yet created (branch pushed, PR URL needs `gh pr create`)
-- Design doc not yet committed to git
-
-## Next Steps (in order)
-
-1. Run `/catchup` to restore context in new session
-2. Read the design document: `docs/plans/2026-02-14-vagrant-mode-design.md`
-3. Create implementation plan using `agentic-ai-plan` skill (enriches design with agent orchestration)
-4. Set up a git worktree for isolated implementation
-5. Execute plan with `agentic-ai-implement` (parallel agent team)
-6. Create PR for skeleton repo's `feature/agentic-ai-skills` branch
+- **Branch**: `main` (1 commit ahead of origin, many uncommitted changes)
+- **NOTHING IS COMMITTED** — all work from 3 sessions is uncommitted on main
+- **Binary**: `build/agent-deck` is up to date with all fixes
+- **VM**: Vagrant Ubuntu 24.04, has MCP packages installed, running
+- **Skill renamed**: `vagrant-sudo.md` → `operating-in-vagrant.md`
+- **Two skills exist**: `operating-in-vagrant` (embedded in Go, written to project) + `vagrant-vm-setup` (created inside VM at `.claude/skills/`)
 
 ## Important Context
 
-- Design doc is the source of truth: `docs/plans/2026-02-14-vagrant-mode-design.md`
-- Decisions recorded in `.claude/plans/DECISIONS.md`
-- The feature adds 3 new files: `internal/vagrant/manager.go`, `internal/vagrant/skill.go`, `internal/vagrant/mcp.go`
-- The feature modifies 4 files: `claudeoptions.go`, `tooloptions.go`, `instance.go`, `userconfig.go`
+- Build output MUST go to `build/agent-deck` (homebrew symlink from `/opt/homebrew/bin/`)
+- `EnsureVagrantfile()` skips if Vagrantfile exists — **DELETE IT** to regenerate with new provisioning
+- Existing Vagrantfile + `.vagrant/` in repo root are from testing — not committed
+- `stripJSONKeys()` is the generic helper; `stripMCPServers()` still exists wrapping it
+- MCP packages are `@modelcontextprotocol/server-*` (NOT `@anthropic-ai/mcp-*`)
+- Pool socket MCPs don't work in VM — always use STDIO
+- Node.js 18.x in VM despite some packages wanting 20+
+- Tokyo Night theme: `#2ac3de` for blue (dark mode)
 - Agent-deck is a Go 1.24 TUI app using Bubble Tea, sessions are tmux-based
-- MCP tools use three scopes: LOCAL (.mcp.json), GLOBAL (~/.claude/.claude.json), USER (~/.claude.json)
-- Pool sockets always bypassed for vagrant sessions (STDIO fallback instead)
-- VirtualBox NAT host gateway is `10.0.2.2` (configurable via `[vagrant] host_gateway_ip`)
-- Claude conversations survive VM destruction (session ID stored server-side, `--resume` flag)
+
+## Next Steps (in order)
+
+1. **Commit all host-side fixes** — many modified files on `main`
+2. Delete `Vagrantfile` + `rm -rf .vagrant/` for fresh test
+3. Test `vagrant up` from scratch → verify config stripping + PATH fixes
+4. Verify `operating-in-vagrant.md` skill loads inside VM
+5. Test VM lifecycle (suspend on stop, destroy on delete)
+6. Continue `feat/kanban` work in worktree
 
 ## Commands to Run First
 
 ```bash
-# Check branch status
-git status
-git log --oneline -5
-
-# Read the design doc
-cat docs/plans/2026-02-14-vagrant-mode-design.md
+go build -o build/agent-deck ./cmd/agent-deck/   # rebuild binary
+go test ./internal/vagrant/ -v -count=1            # run vagrant tests
+rm Vagrantfile && rm -rf .vagrant/                 # force fresh VM
 ```

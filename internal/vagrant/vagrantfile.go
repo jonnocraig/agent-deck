@@ -209,6 +209,18 @@ func (m *Manager) generateVagrantfile() string {
     chown -R vagrant:vagrant /vagrant
     echo "AcceptEnv *" >> /etc/ssh/sshd_config
     systemctl restart sshd
+
+    # Ensure ~/.local/bin exists and is in PATH for the vagrant user.
+    # Claude Code's native install expects this directory; creating it and
+    # symlinking the npm-installed binary prevents installMethod detection errors.
+    su - vagrant -c 'mkdir -p ~/.local/bin'
+    CLAUDE_BIN=$(which claude 2>/dev/null || true)
+    if [ -n "$CLAUDE_BIN" ]; then
+      ln -sf "$CLAUDE_BIN" /home/vagrant/.local/bin/claude
+    fi
+    if ! grep -q 'local/bin' /home/vagrant/.bashrc 2>/dev/null; then
+      echo 'export PATH="$HOME/.local/bin:$PATH"' >> /home/vagrant/.bashrc
+    fi
   SHELL
 %s
 end
