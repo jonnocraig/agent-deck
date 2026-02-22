@@ -1,79 +1,50 @@
-# Session Handoff - 2026-02-22 (Session 5)
+# Session Handoff - 2026-02-22 (Session 6)
 
 ## What Was Accomplished This Session
 
-### Bug Fixes (manual testing of Vagrant mode)
-1. **Stale binary bug**: OAuth code wasn't compiled into running binary. Root cause: `build/agent-deck` wasn't rebuilt after adding `oauth.go`. Added CLAUDE.md rule: always rebuild before testing.
-2. **Skill not discovered**: `EnsureSudoSkill()` wrote `operating-in-vagrant.md` as standalone file. Claude Code requires skills as directories with `SKILL.md`. Fixed to write `operating-in-vagrant/SKILL.md`. Added legacy cleanup for `vagrant-sudo.md` and `operating-in-vagrant.md`.
-3. **Skill not pre-loaded**: Claude Code lazy-loads skills (descriptions only in context). Added step 6 to `SyncClaudeConfig()` that writes `~/.claude/CLAUDE.md` inside the VM with the operating-in-vagrant skill body. CLAUDE.md is always loaded in full at session start.
-
-### New Files Created
-- `CLAUDE.md` — project-level instructions with critical "rebuild before testing" rule
-
-### Plan Created (Not Yet Implemented)
-- **User Profile Sync**: `/Users/jon_ec/.claude/plans/snug-marinating-teapot.md`
-- Goal: sync user's full Claude Code profile (skills, commands, agents, rules, CLAUDE.md) to the VM
-- Approach: batch tar transfer with symlink dereferencing, single SSH call for all 4 directories
-- Status: **Plan approved, implementation NOT started**
-
-## Files Changed This Session (Uncommitted)
-
-| File | Type | Description |
-|------|------|-------------|
-| `CLAUDE.md` | NEW | Project instructions with rebuild-before-test rule |
-| `internal/vagrant/skill.go` | MODIFIED | Write skill as directory `operating-in-vagrant/SKILL.md`, cleanup legacy files |
-| `internal/vagrant/skill_test.go` | MODIFIED | Updated paths to `operating-in-vagrant/SKILL.md`, added legacy cleanup test |
-| `internal/vagrant/e2e_test.go` | MODIFIED | Updated skill path assertion |
-| `internal/vagrant/sync.go` | MODIFIED | Added `getVMClaudeMD()`, step 6 writes `~/.claude/CLAUDE.md` to VM |
-| `internal/vagrant/sync_test.go` | MODIFIED | Added `TestGetVMClaudeMD`, `TestSyncClaudeConfigWritesClaudeMD` |
-
-## Also Uncommitted from Previous Sessions (4 sessions of work)
-
-| File | Change |
-|------|--------|
-| `internal/vagrant/oauth.go` | NEW — OAuth credential extraction |
-| `internal/vagrant/oauth_test.go` | NEW — 6 OAuth tests |
-| `internal/vagrant/sync.go` | `stripHostOnlyFields()`, `injectVMFields()`, OAuth sync, CLAUDE.md sync |
-| `internal/vagrant/sync_test.go` | OAuth, onboarding, config stripping, CLAUDE.md tests |
-| `internal/vagrant/mcp.go` | `CLAUDE_CODE_OAUTH_TOKEN` env var |
-| `internal/vagrant/mcp_test.go` | Updated env var test cases |
-| `internal/vagrant/vagrantfile.go` | PATH provisioning |
-| `internal/vagrant/skill.go` | Full skill rewrite + directory format |
-| `cmd/agent-deck/main.go` | Blank import for vagrant |
-| `internal/session/instance.go` | `buildVagrantClaudeCommand()` |
-| `internal/ui/home.go` | `[Vagrant]` badge |
-| `internal/ui/styles.go` | `ColorBlue` |
+1. **Committed 5 sessions of work** to git as `355417e` on `main` (13 files, 811 insertions)
+   - OAuth forwarding, skill directory fix, CLAUDE.md pre-loading, onboarding bypass, env var forwarding
+2. **Brainstormed user profile sync** with 4-perspective agent team (Architect, Implementer, Devil's Advocate, Security Analyst)
+3. **Wrote design document**: `.claude/plans/2026-02-22-user-profile-sync-design.md`
+   - Approach: Go `archive/tar` with security hardening
+   - In-memory tar, stdin pipe to `vagrant ssh`, single SSH call
+   - Symlink validation (restrict to ~/.claude/ and ~/.agents/)
+   - CLAUDE.md merge (VM context first, user content appended)
+   - 100MB size limit, .DS_Store exclusion, operating-in-vagrant/ exclusion
+   - New file: `sync_profile.go` (~150 lines) + `sync_profile_test.go` (~300 lines)
 
 ## Current State
 
-- **Branch**: `main` (5 sessions of uncommitted work)
-- **NOTHING IS COMMITTED** — all work is uncommitted on main
-- **Binary**: `build/agent-deck` rebuilt with all changes (skill dir fix + CLAUDE.md sync)
+- **Branch**: `main` (1 commit ahead of origin: `355417e`)
+- **All previous work committed** — clean working tree (except plan files and untracked dirs)
+- **Design complete, implementation NOT started**
 - **Tests**: All pass (`go test ./internal/vagrant/ -count=1 -short`)
-- **Manual test results**: OAuth works, skill discovered, CLAUDE.md pending retest
 
 ## Important Context
 
-- `EnsureSudoSkill()` now writes `operating-in-vagrant/SKILL.md` (directory format) and cleans up legacy standalone `.md` files
-- `getVMClaudeMD()` strips YAML frontmatter from `GetVagrantSudoSkill()` and returns just the body for CLAUDE.md
-- Step 6 of `SyncClaudeConfig()` writes `~/.claude/CLAUDE.md` to VM — this is a user-level file that Claude Code always loads on session start
+- Design doc is the source of truth: `.claude/plans/2026-02-22-user-profile-sync-design.md`
+- The old plan reference (`snug-marinating-teapot.md`) no longer exists — replaced by the design doc
+- `SyncClaudeConfig()` currently has 6 steps; profile sync adds step 6 modification + step 7
+- Step 6 change: `getVMClaudeMD()` → `getMergedVMClaudeMD()` (append host CLAUDE.md)
+- Step 7 new: `syncProfileToVM()` using `createProfileTar()` + stdin pipe
+- Package-level injectable: `var createProfileTarFunc = createProfileTar`
+- Manager struct needs NO new fields (tar creation is pure function, VM pipe uses existing vagrantCmd)
 - Build output MUST go to `build/agent-deck` (homebrew symlink from `/opt/homebrew/bin/`)
 - **ALWAYS rebuild before manual testing**: `go build -o build/agent-deck ./cmd/agent-deck/`
-- Plan for user profile sync is at `/Users/jon_ec/.claude/plans/snug-marinating-teapot.md`
 
 ## Next Steps (in order)
 
-1. **Implement user profile sync** (plan at `.claude/plans/snug-marinating-teapot.md`):
-   - Create `internal/vagrant/sync_batch.go` — tar infrastructure with symlink dereferencing
-   - Create `internal/vagrant/sync_batch_test.go` — tar tests
-   - Add `extractTarInVMFunc` to Manager struct in `manager.go`
-   - Modify `sync.go` step 6 to merge user CLAUDE.md with VM context
-   - Add steps 7-10: sync skills/commands/agents/rules via combined tar
-   - Add sync tests
-2. **Commit ALL changes to git** (5 sessions of uncommitted work)
-3. Fresh VM test with `vagrant destroy` + `vagrant up`
-4. Verify full profile sync works inside VM
-5. Continue `feat/kanban` work in worktree
+1. **Create implementation plan** (use `agentic-ai-plan` with the design doc as input)
+2. **Implement user profile sync**:
+   - Create `internal/vagrant/sync_profile.go` — tar creation, symlink validation, VM sync
+   - Create `internal/vagrant/sync_profile_test.go` — 13 test cases
+   - Modify `internal/vagrant/sync.go` — step 6 CLAUDE.md merge, step 7 profile sync call
+   - Update `internal/vagrant/sync_test.go` — merged CLAUDE.md tests
+3. **Rebuild binary and run full test suite**
+4. **Commit and push**
+5. **Fresh VM test** (`vagrant destroy` + `vagrant up`)
+6. **Increase default VM RAM** from 4GB to 16GB (`vagrantfile.go:162`, `settings.MemoryMB` default)
+7. Continue `feat/kanban` work in worktree
 
 ## Commands to Run First
 

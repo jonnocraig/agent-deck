@@ -12,11 +12,11 @@
 **Decision**: Added step 6 to `SyncClaudeConfig()` that writes `~/.claude/CLAUDE.md` inside the VM with the skill body (YAML frontmatter stripped). CLAUDE.md is always loaded in full by Claude Code at session start. The skill directory remains for `/operating-in-vagrant` slash command access.
 **Consequences**: VM context is immediately available to Claude without user interaction. Dual presence (CLAUDE.md + skill) provides both automatic context and on-demand invocation.
 
-## 2026-02-22 - User Profile Sync via Batch Tar Transfer (Planned)
+## 2026-02-22 - User Profile Sync via Go archive/tar with Security Hardening
 
-**Context**: VM sessions only sync 6 items (configs, settings, statusline, OAuth, VM CLAUDE.md). User's skills (~22), commands (~35), agents (~22), and rules (9) are missing. Syncing 80+ files individually via `writeFileToVM()` would take ~16 seconds.
-**Decision**: Batch transfer via tar archive. Combine all 4 directories (skills/commands/agents/rules) into a single tar with symlinks dereferenced. Extract in VM with one SSH call (~200ms). Merge user's CLAUDE.md with VM context instead of overwriting.
-**Consequences**: Full user profile available in VM. Single SSH call vs 80+ individual calls. Symlinks from plugin caches resolved to real content. Plan at `.claude/plans/snug-marinating-teapot.md`.
+**Context**: VM sessions only sync 6 items (configs, settings, statusline, OAuth, VM CLAUDE.md). User's skills (33), commands (33), agents (19), and rules (9) are missing. Syncing 94 files individually via `writeFileToVM()` would take ~19 seconds. 4-perspective brainstorm (Architect, Implementer, Devil's Advocate, Security) evaluated 3 approaches.
+**Decision**: Go `archive/tar` in-memory with stdin pipe to `vagrant ssh -c "tar xf - -C ~/.claude/"`. Symlink targets validated (must resolve within ~/.claude/ or ~/.agents/). Broken/cyclic symlinks skipped. .DS_Store, CLAUDE.md, operating-in-vagrant/ excluded from tar. 100MB size limit. Post-extract chmod normalization. CLAUDE.md merge: VM context first, user content appended. New file `sync_profile.go` + tests. Package-level injectable `createProfileTarFunc`.
+**Consequences**: Full user profile in VM via single SSH call (~2s). Symlinks safely dereferenced. Design doc at `.claude/plans/2026-02-22-user-profile-sync-design.md`.
 
 ## 2026-02-22 - OAuth Credential Forwarding for Vagrant VM
 

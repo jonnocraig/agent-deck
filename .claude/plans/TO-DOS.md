@@ -2,44 +2,42 @@
 
 ## In Progress
 
-- [ ] **Implement user profile sync to Vagrant VM** (plan: `.claude/plans/snug-marinating-teapot.md`)
-  - [ ] Add `extractTarInVMFunc` field to Manager struct (`manager.go`)
-  - [ ] Create `internal/vagrant/sync_batch.go` — tar infrastructure with symlink dereferencing
-  - [ ] Create `internal/vagrant/sync_batch_test.go` — tar tests (7 test cases)
-  - [ ] Modify `sync.go` step 6: merge user CLAUDE.md with VM context
-  - [ ] Add steps 7-10 to `sync.go`: sync skills/commands/agents/rules via combined tar
-  - [ ] Add sync_test.go tests for CLAUDE.md merge and profile sync
+- [ ] **Implement user profile sync to Vagrant VM** (design: `.claude/plans/2026-02-22-user-profile-sync-design.md`)
+  - [ ] Create implementation plan (`agentic-ai-plan`)
+  - [ ] Create `internal/vagrant/sync_profile.go` — tar creation, symlink validation, VM sync
+  - [ ] Create `internal/vagrant/sync_profile_test.go` — 13 test cases
+  - [ ] Modify `sync.go` step 6: `getVMClaudeMD()` → `getMergedVMClaudeMD()` (append host CLAUDE.md)
+  - [ ] Add step 7 to `sync.go`: call `syncProfileToVM()`
+  - [ ] Update `sync_test.go` for CLAUDE.md merge + profile sync call
   - [ ] Rebuild binary and run full test suite
 
-## Completed This Session (2026-02-22 — Bug fixes + profile sync planning)
+## Completed This Session (2026-02-22 — Commit + design brainstorm)
 
-- [x] Fixed stale binary bug — OAuth code not compiled. Added CLAUDE.md rebuild rule
-- [x] Fixed skill discovery — changed from standalone `.md` to directory `SKILL.md` format
-- [x] Fixed skill pre-loading — added `~/.claude/CLAUDE.md` sync to VM via `SyncClaudeConfig()`
-- [x] Created project CLAUDE.md with rebuild-before-testing rule
-- [x] Added legacy skill file cleanup (vagrant-sudo.md, operating-in-vagrant.md)
-- [x] Added `TestEnsureSudoSkillCleansUpLegacyFiles` test
-- [x] Added `TestGetVMClaudeMD` and `TestSyncClaudeConfigWritesClaudeMD` tests
-- [x] Created and approved plan for user profile sync (`.claude/plans/snug-marinating-teapot.md`)
+- [x] Committed 5 sessions of work as `355417e` (13 files, 811 insertions)
+- [x] Brainstormed profile sync with 4-agent team (Architect, Implementer, Devil's Advocate, Security)
+- [x] Wrote design document: `.claude/plans/2026-02-22-user-profile-sync-design.md`
+- [x] Validated all design sections with user (architecture, components, errors, testing, security)
 
 ## Completed Previous Sessions
 
 - [x] OAuth credential forwarding (oauth.go, sync step 5, CLAUDE_CODE_OAUTH_TOKEN)
 - [x] Config stripping (stripHostOnlyFields, stripSettingsForVM, stripJSONKeys)
 - [x] PATH provisioning (~/.local/bin, claude symlink)
-- [x] Skill rewrite (operating-in-vagrant)
+- [x] Skill rewrite (operating-in-vagrant) + directory format fix
+- [x] CLAUDE.md pre-loading in VM
 - [x] MCP in VM (stripMCPServers, WriteMCPJsonForVagrant)
 - [x] buildVagrantClaudeCommand (tmux-free)
 - [x] [Vagrant] badge
 - [x] Full vagrant mode implementation (33 files, 8051 lines)
+- [x] Project CLAUDE.md with rebuild-before-testing rule
 
 ## Pending
 
-- [ ] **Commit ALL changes to git** (5 sessions of uncommitted work on main)
 - [ ] Delete Vagrantfile + `.vagrant/` for fresh VM test
 - [ ] Test full profile sync inside VM (skills, commands, agents, rules visible)
 - [ ] Test VM suspend on session stop, destroy on session delete
 - [ ] Test multi-session VM sharing
+- [ ] **Increase default VM RAM from 4GB to 16GB** (`vagrantfile.go:162`)
 - [ ] Upgrade Node.js in VM from 18.x to 20.x
 - [ ] Continue `feat/kanban` work in worktree
 
