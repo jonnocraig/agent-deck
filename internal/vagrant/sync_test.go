@@ -712,68 +712,6 @@ func TestStripHostOnlyFields(t *testing.T) {
 	}
 }
 
-func TestStripSettingsForVM(t *testing.T) {
-	tests := []struct {
-		name        string
-		input       string
-		wantAbsent  []string
-		wantPresent []string
-	}{
-		{
-			name:        "strips plugins and hooks",
-			input:       `{"enabledPlugins":{"a":true,"b":true},"hooks":{"preToolUse":[]},"statusLine":{"type":"command"},"permissions":{}}`,
-			wantAbsent:  []string{"enabledPlugins", "hooks"},
-			wantPresent: []string{"statusLine", "permissions"},
-		},
-		{
-			name:        "only plugins present",
-			input:       `{"enabledPlugins":{"a":true},"statusLine":{"type":"command"}}`,
-			wantAbsent:  []string{"enabledPlugins"},
-			wantPresent: []string{"statusLine"},
-		},
-		{
-			name:        "no strippable fields leaves data unchanged",
-			input:       `{"statusLine":{"type":"command"},"env":{}}`,
-			wantAbsent:  []string{},
-			wantPresent: []string{"statusLine", "env"},
-		},
-		{
-			name:  "invalid JSON returns original",
-			input: `{broken`,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := stripSettingsForVM([]byte(tt.input))
-
-			if tt.name == "invalid JSON returns original" {
-				if string(result) != tt.input {
-					t.Errorf("expected original data for invalid JSON")
-				}
-				return
-			}
-
-			var parsed map[string]interface{}
-			if err := json.Unmarshal(result, &parsed); err != nil {
-				t.Fatalf("result is not valid JSON: %v\nresult: %s", err, string(result))
-			}
-
-			for _, key := range tt.wantAbsent {
-				if _, ok := parsed[key]; ok {
-					t.Errorf("key %q should have been stripped", key)
-				}
-			}
-
-			for _, key := range tt.wantPresent {
-				if _, ok := parsed[key]; !ok {
-					t.Errorf("key %q should have been preserved", key)
-				}
-			}
-		})
-	}
-}
-
 func TestStripJSONKeys_NoChangeWhenNoKeysPresent(t *testing.T) {
 	input := `{"a": 1, "b": 2}`
 	result := stripJSONKeys([]byte(input), []string{"c", "d"})
@@ -852,7 +790,7 @@ func TestSyncClaudeConfig_HostOnlyFieldsStripped(t *testing.T) {
 	}
 }
 
-func TestSyncClaudeConfig_SettingsPluginsStripped(t *testing.T) {
+func TestSyncClaudeConfig_SettingsPreserved(t *testing.T) {
 	tempHome := t.TempDir()
 
 	// Disable OAuth extraction for this test
@@ -870,19 +808,8 @@ func TestSyncClaudeConfig_SettingsPluginsStripped(t *testing.T) {
 		t.Fatalf("failed to create settings.json: %v", err)
 	}
 
-	originalHome := os.Getenv("HOME")
-	os.Setenv("HOME", tempHome)
-	defer os.Setenv("HOME", originalHome)
-
-	originalEnv := os.Getenv("CLAUDE_CONFIG_DIR")
-	os.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
-	defer func() {
-		if originalEnv != "" {
-			os.Setenv("CLAUDE_CONFIG_DIR", originalEnv)
-		} else {
-			os.Unsetenv("CLAUDE_CONFIG_DIR")
-		}
-	}()
+	t.Setenv("HOME", tempHome)
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
 
 	manager := NewManager("/test/project", session.VagrantSettings{})
 
@@ -899,11 +826,11 @@ func TestSyncClaudeConfig_SettingsPluginsStripped(t *testing.T) {
 	for _, call := range writeCalls {
 		if call.remotePath == "~/.claude/settings.json" {
 			content := string(call.content)
-			if strings.Contains(content, "enabledPlugins") {
-				t.Errorf("enabledPlugins should be stripped from settings.json, got: %s", content)
+			if !strings.Contains(content, "enabledPlugins") {
+				t.Errorf("enabledPlugins should be preserved in settings.json, got: %s", content)
 			}
-			if strings.Contains(content, "hooks") {
-				t.Errorf("hooks should be stripped from settings.json, got: %s", content)
+			if !strings.Contains(content, "hooks") {
+				t.Errorf("hooks should be preserved in settings.json, got: %s", content)
 			}
 			if !strings.Contains(content, "statusLine") {
 				t.Errorf("statusLine should be preserved in settings.json, got: %s", content)

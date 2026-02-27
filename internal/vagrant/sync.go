@@ -62,11 +62,12 @@ func (m *Manager) SyncClaudeConfig() error {
 		}
 	}
 
-	// 3. Sync settings.json (statusLine, preferences — without plugins/hooks)
+	// 3. Sync settings.json (statusLine, preferences, plugins, hooks)
+	// Plugins and hooks are synced as-is. Hooks that reference host-only binaries
+	// fail gracefully in the VM. Plugins are synced via profile tar (step 7).
 	settingsFile := filepath.Join(homeDir, ".claude", "settings.json")
 	if data, err := os.ReadFile(settingsFile); err == nil {
-		stripped := stripSettingsForVM(data)
-		if err := writeFunc("~/.claude/settings.json", stripped); err != nil {
+		if err := writeFunc("~/.claude/settings.json", data); err != nil {
 			// Non-fatal
 		}
 	}
@@ -175,15 +176,6 @@ func stripMCPServers(data []byte) []byte {
 // fails with "OAuth token has expired" (401).
 func stripHostOnlyFields(data []byte) []byte {
 	return stripJSONKeys(data, []string{"mcpServers", "installMethod"})
-}
-
-// stripSettingsForVM removes keys from ~/.claude/settings.json that don't work
-// inside the VM:
-//   - enabledPlugins: plugin npm packages aren't installed in the VM, causing
-//     mass install failures (e.g. "22 plugins failed to install")
-//   - hooks: hook commands may reference host-side binaries or paths
-func stripSettingsForVM(data []byte) []byte {
-	return stripJSONKeys(data, []string{"enabledPlugins", "hooks"})
 }
 
 // injectVMFields adds VM-specific fields to a Claude config JSON object.
