@@ -1404,9 +1404,9 @@ func (i *Instance) buildTmuxOptionOverrides() map[string]string {
 	if tmuxCfg := GetTmuxSettings(); len(tmuxCfg.Options) > 0 {
 		overrides = maps.Clone(tmuxCfg.Options)
 	}
-	// Sandbox sessions need remain-on-exit so dead-pane detection works.
-	// Non-sandbox sessions use default tmux behaviour (pane closes on exit).
-	if i.IsSandboxed() {
+	// Sandbox and vagrant sessions need remain-on-exit so dead-pane detection works.
+	// Non-isolated sessions use default tmux behaviour (pane closes on exit).
+	if i.IsSandboxed() || i.IsVagrantMode() {
 		if overrides == nil {
 			overrides = make(map[string]string)
 		}
@@ -1468,9 +1468,9 @@ func (i *Instance) Start() error {
 	i.loadCustomPatternsFromConfig()
 
 	// Build tmux option overrides from config (e.g. allow-passthrough = "all").
-	// Sandbox sessions also get remain-on-exit for dead-pane detection.
+	// Sandbox and vagrant sessions also get remain-on-exit for dead-pane detection.
 	i.tmuxSession.OptionOverrides = i.buildTmuxOptionOverrides()
-	i.tmuxSession.RunCommandAsInitialProcess = i.IsSandboxed()
+	i.tmuxSession.RunCommandAsInitialProcess = i.IsSandboxed() || i.IsVagrantMode()
 
 	// Start the tmux session
 	if err := i.tmuxSession.Start(command); err != nil {
@@ -1564,9 +1564,9 @@ func (i *Instance) StartWithMessage(message string) error {
 	i.loadCustomPatternsFromConfig()
 
 	// Build tmux option overrides from config (e.g. allow-passthrough = "all").
-	// Sandbox sessions also get remain-on-exit for dead-pane detection.
+	// Sandbox and vagrant sessions also get remain-on-exit for dead-pane detection.
 	i.tmuxSession.OptionOverrides = i.buildTmuxOptionOverrides()
-	i.tmuxSession.RunCommandAsInitialProcess = i.IsSandboxed()
+	i.tmuxSession.RunCommandAsInitialProcess = i.IsSandboxed() || i.IsVagrantMode()
 
 	// Start the tmux session
 	if err := i.tmuxSession.Start(command); err != nil {
@@ -3545,9 +3545,9 @@ func (i *Instance) Restart() error {
 	i.loadCustomPatternsFromConfig()
 
 	// Build tmux option overrides from config (e.g. allow-passthrough = "all").
-	// Sandbox sessions also get remain-on-exit for dead-pane detection.
+	// Sandbox and vagrant sessions also get remain-on-exit for dead-pane detection.
 	i.tmuxSession.OptionOverrides = i.buildTmuxOptionOverrides()
-	i.tmuxSession.RunCommandAsInitialProcess = i.IsSandboxed()
+	i.tmuxSession.RunCommandAsInitialProcess = i.IsSandboxed() || i.IsVagrantMode()
 
 	mcpLog.Debug("restart_starting_new_session", slog.String("command", command))
 
