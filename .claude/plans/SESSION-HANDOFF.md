@@ -1,8 +1,15 @@
-# Session Handoff - 2026-02-27 (Session 11 — Wave 2 Complete, Wave 3 Next)
+# Session Handoff - 2026-02-27 (Session 12 — JSON Plan Sync, Wave 3 Next)
 
 ## What Was Accomplished This Session
 
-1. **Executed Wave 2: Data Layer** via `agentic-ai-implement` skill (5 tasks, all complete)
+1. **Synced JSON agent plan with MD** (6295382)
+   - JSON was 24 tasks across 2 phases; MD had 28 tasks across 8 phases
+   - Added missing tasks: 1.4 (Bubble Tea messages), 1.5 (sort order), 3.3 (n/d create/delete), 3.4 (m move card)
+   - Added missing phases: 2-7 (Board UI through Skills)
+   - Updated progress tracking: 8 tasks complete (waves 1-2), 20 pending
+   - JSON is now the preferred source of truth for `agentic-ai-implement`
+
+2. **Previous session (11): Executed Wave 2: Data Layer** (5 tasks, all complete)
    - Task 1.1 || 1.2 (parallel): KanbanColumn type + SQLite schema v2 migrations
    - Task 1.3 || 1.4 (parallel): CRUD methods + Bubble Tea message types
    - Task 1.5 (sequential): Sort order calculation + rebalancing
@@ -35,8 +42,8 @@
 ## Current State
 
 - **Branch**: `feature/KanbanMode` (worktree at `.worktrees/feature-KanbanMode`)
-- **Last commit**: `9b7ea91` — `feat(kanban): add data layer — types, schema v2, CRUD, messages, sort order`
-- **Ahead of origin by 1 commit** (not yet pushed)
+- **Last commit**: `6295382` — `docs: sync JSON agent plan with MD — add missing tasks and phases`
+- **Ahead of origin by 3 commits** (need to push)
 - **Tests**: All pass (`go test ./... -count=1 -short` — 16/16 packages)
 - **Working tree**: Clean
 - **Plan**: 28 tasks, 6 waves — Waves 1-2 done, Waves 3-6 pending
@@ -45,7 +52,7 @@
 
 - **Design doc**: `docs/plans/2026-02-27-kanban-mode-design.md` (source of truth)
 - **Agent plan (MD)**: `.claude/plans/agent-teams/2026-02-27-kanban-mode-agent-plan.md` (28 tasks, 6 waves)
-- **Agent plan (JSON)**: `.claude/plans/agent-teams/2026-02-27-kanban-mode-agent-plan.json`
+- **Agent plan (JSON)**: `.claude/plans/agent-teams/2026-02-27-kanban-mode-agent-plan.json` (**preferred source of truth** — fully synced with MD)
 - **User chose Opus for all tasks** (not optimizing for cost)
 - **Build output**: `go build -o build/agent-deck ./cmd/agent-deck/` (ALWAYS rebuild before testing)
 - **statedb uses StateDB.Migrate()** with schema versioning — Wave 2 added schema v2
