@@ -729,3 +729,64 @@ func TestCreateProfileTar_EmptyDirsIgnored(t *testing.T) {
 		}
 	}
 }
+
+func TestCreateProfileTar_PluginsSelectiveSync(t *testing.T) {
+	t.Parallel()
+	homeDir := t.TempDir()
+
+	// Create files that SHOULD be included
+	includeFiles := []string{
+		"plugins/installed_plugins.json",
+		"plugins/known_marketplaces.json",
+		"plugins/cache/some-plugin/plugin.json",
+		"plugins/cache/some-plugin/index.js",
+	}
+	for _, f := range includeFiles {
+		p := filepath.Join(homeDir, ".claude", f)
+		if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err := os.WriteFile(p, []byte("content-"+f), 0644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+
+	// Create files that SHOULD be excluded (marketplaces/)
+	excludeFiles := []string{
+		"plugins/marketplaces/my-marketplace/README.md",
+		"plugins/marketplaces/my-marketplace/plugins/tool/SKILL.md",
+	}
+	for _, f := range excludeFiles {
+		p := filepath.Join(homeDir, ".claude", f)
+		if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err := os.WriteFile(p, []byte("excluded-"+f), 0644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+
+	tarData, err := createProfileTar(homeDir)
+	if err != nil {
+		t.Fatalf("createProfileTar failed: %v", err)
+	}
+	if len(tarData) == 0 {
+		t.Fatal("expected non-empty tar")
+	}
+
+	entries := readTarEntries(t, tarData)
+
+	// Verify included files are present
+	for _, f := range includeFiles {
+		if _, ok := entries[f]; !ok {
+			t.Errorf("expected %q in tar, not found", f)
+		}
+	}
+
+	// Verify excluded files are absent
+	for _, f := range excludeFiles {
+		if _, ok := entries[f]; ok {
+			t.Errorf("did not expect %q in tar (should be excluded)", f)
+		}
+	}
+}

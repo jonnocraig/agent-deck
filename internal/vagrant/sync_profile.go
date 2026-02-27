@@ -33,6 +33,7 @@ func createProfileTar(homeDir string) ([]byte, error) {
 		{filepath.Join(homeDir, ".claude", "commands"), "commands"},
 		{filepath.Join(homeDir, ".claude", "agents"), "agents"},
 		{filepath.Join(homeDir, ".claude", "rules"), "rules"},
+		{filepath.Join(homeDir, ".claude", "plugins"), "plugins"},
 	}
 
 	var buf bytes.Buffer
@@ -195,6 +196,11 @@ func isExcludedProfilePath(relPath string) bool {
 		return true
 	}
 
+	// Exclude plugins/marketplaces/ (large git clones, Claude Code pulls on demand)
+	if strings.HasPrefix(normalized, "plugins/marketplaces/") || normalized == "plugins/marketplaces" {
+		return true
+	}
+
 	return false
 }
 
@@ -245,8 +251,8 @@ func (m *Manager) syncProfileToVM() error {
 	}
 
 	chmodCmd := m.vagrantCmd("ssh", "-c",
-		"find ~/.claude/skills ~/.claude/commands ~/.claude/agents ~/.claude/rules -type f -exec chmod 644 {} + 2>/dev/null; "+
-			"find ~/.claude/skills ~/.claude/commands ~/.claude/agents ~/.claude/rules -type d -exec chmod 755 {} + 2>/dev/null")
+		"find ~/.claude/skills ~/.claude/commands ~/.claude/agents ~/.claude/rules ~/.claude/plugins -type f -exec chmod 644 {} + 2>/dev/null; "+
+			"find ~/.claude/skills ~/.claude/commands ~/.claude/agents ~/.claude/rules ~/.claude/plugins -type d -exec chmod 755 {} + 2>/dev/null")
 	_ = chmodCmd.Run() // Non-fatal
 
 	return nil
