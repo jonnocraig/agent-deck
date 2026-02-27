@@ -20,25 +20,11 @@ type ClaudeOptionsPanel struct {
 	useChrome            bool
 	useTeammateMode      bool
 	useVagrantMode       bool
-	// Track previous skip permissions state for restore on vagrant toggle off
-	prevSkipPermissions bool
 	// Focus tracking
 	focusIndex int
 	// Whether this panel is for fork dialog (fewer options)
 	isForkMode bool
-	// Total number of focusable elements
-	focusCount int
 }
-
-// Focus indices for NewDialog mode:
-// 0: Session mode (radio)
-// 1: Resume ID input (only when mode=resume)
-// 2: Skip permissions checkbox
-// 3: Chrome checkbox
-
-// Focus indices for ForkDialog mode:
-// 0: Skip permissions checkbox
-// 1: Chrome checkbox
 
 // NewClaudeOptionsPanel creates a new panel for NewDialog
 func NewClaudeOptionsPanel() *ClaudeOptionsPanel {
@@ -51,7 +37,6 @@ func NewClaudeOptionsPanel() *ClaudeOptionsPanel {
 		sessionMode:   0, // new
 		resumeIDInput: resumeInput,
 		isForkMode:    false,
-		focusCount:    6, // Will adjust dynamically
 	}
 }
 
@@ -61,7 +46,6 @@ func NewClaudeOptionsPanelForFork() *ClaudeOptionsPanel {
 		sessionMode:   0,
 		resumeIDInput: textinput.New(), // Not used in fork mode
 		isForkMode:    true,
-		focusCount:    4, // skip, chrome, teammate, vagrant
 	}
 }
 
@@ -118,6 +102,46 @@ func (p *ClaudeOptionsPanel) GetOptions() *session.ClaudeOptions {
 	}
 
 	return opts
+}
+
+// buildFocusItems returns a dynamic slice of focus item names based on current state.
+// The slice changes depending on whether skipPermissions is checked (vagrantMode appears)
+// and whether resume mode is active (resumeInput appears).
+func (p *ClaudeOptionsPanel) buildFocusItems() []string {
+	if p.isForkMode {
+		items := []string{"skipPermissions"}
+		if p.skipPermissions {
+			items = append(items, "vagrantMode")
+		}
+		items = append(items, "chrome", "teammateMode")
+		return items
+	}
+
+	// NewDialog mode
+	items := []string{"sessionMode"}
+	if p.sessionMode == 2 {
+		items = append(items, "resumeInput")
+	}
+	items = append(items, "skipPermissions")
+	if p.skipPermissions {
+		items = append(items, "vagrantMode")
+	}
+	items = append(items, "chrome", "teammateMode")
+	return items
+}
+
+// getFocusType returns what type of element is currently focused
+func (p *ClaudeOptionsPanel) getFocusType() string {
+	items := p.buildFocusItems()
+	if p.focusIndex >= 0 && p.focusIndex < len(items) {
+		return items[p.focusIndex]
+	}
+	return ""
+}
+
+// getFocusCount returns the number of focusable elements
+func (p *ClaudeOptionsPanel) getFocusCount() int {
+	return len(p.buildFocusItems())
 }
 
 // Update handles key events
@@ -186,110 +210,27 @@ func (p *ClaudeOptionsPanel) Update(msg tea.Msg) tea.Cmd {
 
 // handleSpaceKey handles space key for toggling checkboxes/radios
 func (p *ClaudeOptionsPanel) handleSpaceKey() {
-	if p.isForkMode {
-		switch p.focusIndex {
-		case 0:
-			p.skipPermissions = !p.skipPermissions
-		case 1:
-			p.useChrome = !p.useChrome
-		case 2:
-			p.useTeammateMode = !p.useTeammateMode
-		case 3:
-			// Vagrant mode toggle
-			p.useVagrantMode = !p.useVagrantMode
-			if p.useVagrantMode {
-				// Save current skip permissions state and force it on
-				p.prevSkipPermissions = p.skipPermissions
-				p.skipPermissions = true
-			} else {
-				// Restore previous skip permissions state
-				p.skipPermissions = p.prevSkipPermissions
-			}
+	switch p.getFocusType() {
+	case "sessionMode":
+		// Cycle through modes on space
+		p.sessionMode = (p.sessionMode + 1) % 3
+	case "skipPermissions":
+		p.skipPermissions = !p.skipPermissions
+		// When unchecking skip permissions, also clear vagrant mode
+		if !p.skipPermissions {
+			p.useVagrantMode = false
 		}
-	} else {
-		// NewDialog mode
-		switch p.getFocusType() {
-		case "sessionMode":
-			// Cycle through modes on space
-			p.sessionMode = (p.sessionMode + 1) % 3
-		case "skipPermissions":
-			p.skipPermissions = !p.skipPermissions
-		case "chrome":
-			p.useChrome = !p.useChrome
-		case "teammateMode":
-			p.useTeammateMode = !p.useTeammateMode
-		case "vagrantMode":
-			// Vagrant mode toggle
-			p.useVagrantMode = !p.useVagrantMode
-			if p.useVagrantMode {
-				// Save current skip permissions state and force it on
-				p.prevSkipPermissions = p.skipPermissions
-				p.skipPermissions = true
-			} else {
-				// Restore previous skip permissions state
-				p.skipPermissions = p.prevSkipPermissions
-			}
+		// Clamp focusIndex if it now exceeds available items
+		if p.focusIndex >= p.getFocusCount() {
+			p.focusIndex = p.getFocusCount() - 1
 		}
+	case "chrome":
+		p.useChrome = !p.useChrome
+	case "teammateMode":
+		p.useTeammateMode = !p.useTeammateMode
+	case "vagrantMode":
+		p.useVagrantMode = !p.useVagrantMode
 	}
-}
-
-// getFocusType returns what type of element is currently focused
-func (p *ClaudeOptionsPanel) getFocusType() string {
-	if p.isForkMode {
-		switch p.focusIndex {
-		case 0:
-			return "skipPermissions"
-		case 1:
-			return "chrome"
-		case 2:
-			return "teammateMode"
-		case 3:
-			return "vagrantMode"
-		}
-	} else {
-		idx := p.focusIndex
-		// 0: session mode
-		if idx == 0 {
-			return "sessionMode"
-		}
-		// 1: resume input (only if mode == resume)
-		if p.sessionMode == 2 {
-			if idx == 1 {
-				return "resumeInput"
-			}
-			idx-- // Adjust for missing resume input
-		}
-		// 2: skip permissions
-		if idx == 1 {
-			return "skipPermissions"
-		}
-		// 3: chrome
-		if idx == 2 {
-			return "chrome"
-		}
-		// 4: teammate mode
-		if idx == 3 {
-			return "teammateMode"
-		}
-		// 5: vagrant mode
-		if idx == 4 {
-			return "vagrantMode"
-		}
-	}
-	return ""
-}
-
-// getFocusCount returns the number of focusable elements
-func (p *ClaudeOptionsPanel) getFocusCount() int {
-	if p.isForkMode {
-		return 4 // skip, chrome, teammate, vagrant
-	}
-
-	count := 5 // session mode, skip, chrome, teammate, vagrant
-	if p.sessionMode == 2 {
-		count++ // resume input
-	}
-	return count
 }
 
 // isResumeInputFocused returns true if resume input is focused
@@ -325,18 +266,34 @@ func (p *ClaudeOptionsPanel) View() string {
 }
 
 // viewForkMode renders options for ForkDialog
-func (p *ClaudeOptionsPanel) viewForkMode(labelStyle, activeStyle, dimStyle, headerStyle lipgloss.Style) string {
+func (p *ClaudeOptionsPanel) viewForkMode(_, _, _, headerStyle lipgloss.Style) string {
 	var content string
 	content += headerStyle.Render("─ Advanced Options ─") + "\n"
-	content += renderCheckboxLine("Skip permissions", p.skipPermissions, p.focusIndex == 0)
-	content += renderCheckboxLine("Chrome mode", p.useChrome, p.focusIndex == 1)
-	content += renderCheckboxLine("Teammate mode", p.useTeammateMode, p.focusIndex == 2)
-	content += renderCheckboxLine("YOLO (sudo perms inside Vagrant VM)", p.useVagrantMode, p.focusIndex == 3)
+
+	focusIdx := 0
+
+	// Skip permissions checkbox
+	content += renderCheckboxLine("Skip permissions", p.skipPermissions, p.focusIndex == focusIdx)
+	focusIdx++
+
+	// YOLO vagrant mode (only when skip permissions is checked)
+	if p.skipPermissions {
+		content += renderIndentedCheckboxLine("YOLO (sudo perms inside Vagrant VM)", p.useVagrantMode, p.focusIndex == focusIdx)
+		focusIdx++
+	}
+
+	// Chrome checkbox
+	content += renderCheckboxLine("Chrome mode", p.useChrome, p.focusIndex == focusIdx)
+	focusIdx++
+
+	// Teammate mode checkbox
+	content += renderCheckboxLine("Teammate mode", p.useTeammateMode, p.focusIndex == focusIdx)
+
 	return content
 }
 
 // viewNewMode renders options for NewDialog
-func (p *ClaudeOptionsPanel) viewNewMode(labelStyle, activeStyle, dimStyle, headerStyle lipgloss.Style) string {
+func (p *ClaudeOptionsPanel) viewNewMode(_, activeStyle, _, headerStyle lipgloss.Style) string {
 	var content string
 	content += headerStyle.Render("─ Claude Options ─") + "\n"
 
@@ -366,16 +323,18 @@ func (p *ClaudeOptionsPanel) viewNewMode(labelStyle, activeStyle, dimStyle, head
 	content += renderCheckboxLine("Skip permissions", p.skipPermissions, p.focusIndex == focusIdx)
 	focusIdx++
 
+	// YOLO vagrant mode (only when skip permissions is checked)
+	if p.skipPermissions {
+		content += renderIndentedCheckboxLine("YOLO (sudo perms inside Vagrant VM)", p.useVagrantMode, p.focusIndex == focusIdx)
+		focusIdx++
+	}
+
 	// Chrome checkbox
 	content += renderCheckboxLine("Chrome mode", p.useChrome, p.focusIndex == focusIdx)
 	focusIdx++
 
 	// Teammate mode checkbox
 	content += renderCheckboxLine("Teammate mode", p.useTeammateMode, p.focusIndex == focusIdx)
-	focusIdx++
-
-	// Vagrant mode checkbox
-	content += renderCheckboxLine("YOLO (sudo perms inside Vagrant VM)", p.useVagrantMode, p.focusIndex == focusIdx)
 
 	return content
 }
@@ -404,6 +363,19 @@ func renderCheckboxLine(label string, checked, focused bool) string {
 		return activeStyle.Render("▶ ") + cb + " " + label + "\n"
 	}
 	return "  " + cb + " " + labelStyle.Render(label) + "\n"
+}
+
+// renderIndentedCheckboxLine renders a checkbox line indented as a sub-option.
+// Used for YOLO vagrant mode which is a sub-option of skip permissions.
+func renderIndentedCheckboxLine(label string, checked, focused bool) string {
+	activeStyle := lipgloss.NewStyle().Foreground(ColorAccent).Bold(true)
+	labelStyle := lipgloss.NewStyle().Foreground(ColorText)
+
+	cb := renderCheckboxMark(checked, focused)
+	if focused {
+		return "  " + activeStyle.Render("▶ ") + cb + " " + label + "\n"
+	}
+	return "    " + cb + " " + labelStyle.Render(label) + "\n"
 }
 
 // renderRadio renders a radio button (•) or ( )

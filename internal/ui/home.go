@@ -132,6 +132,15 @@ const (
 	// Below 12: minimal mode
 )
 
+// pendingVagrantInfo tracks a Vagrant VM boot that is in progress
+// before the session instance exists. Only one VM can boot at a time.
+type pendingVagrantInfo struct {
+	name      string
+	path      string
+	groupPath string
+	startTime time.Time
+}
+
 // Home is the main application model
 type Home struct {
 	// Dimensions
@@ -261,6 +270,7 @@ type Home struct {
 	resumingSessions   map[string]time.Time // sessionID -> resume time (for restart/resume)
 	mcpLoadingSessions map[string]time.Time // sessionID -> MCP reload time
 	forkingSessions    map[string]time.Time // sessionID -> fork start time (fork in progress)
+	pendingVagrantBoot *pendingVagrantInfo  // Pre-session Vagrant VM boot animation (nil when inactive)
 	animationFrame     int                  // Current frame for spinner animation
 
 	// Context for cleanup
@@ -2441,6 +2451,9 @@ func (h *Home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return h, nil
 
 	case sessionCreatedMsg:
+		// Clear pending vagrant boot animation (VM boot completed or failed)
+		h.pendingVagrantBoot = nil
+
 		// Handle reload scenario: session was already started in tmux, we MUST save it to JSON
 		// even during reload, otherwise the session becomes orphaned (exists in tmux but not in storage)
 		h.reloadMu.Lock()
@@ -3259,6 +3272,11 @@ func (h *Home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h.cleanupExpiredAnimations(h.mcpLoadingSessions, claudeTimeout, defaultTimeout)
 		h.cleanupExpiredAnimations(h.forkingSessions, claudeTimeout, defaultTimeout)
 
+		// Clean up stale pending vagrant boot (5 min safety timeout)
+		if h.pendingVagrantBoot != nil && time.Since(h.pendingVagrantBoot.startTime) > 5*time.Minute {
+			h.pendingVagrantBoot = nil
+		}
+
 		// Notification bar sync handled by background worker (syncNotificationsBackground)
 		// which runs even when TUI is paused during tea.Exec
 
@@ -3639,6 +3657,16 @@ func (h *Home) handleNewDialogKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 		h.newDialog.Hide()
 		h.clearError()
+
+		// Set pending vagrant boot feedback before async session creation
+		if claudeOpts != nil && claudeOpts.UseVagrantMode {
+			h.pendingVagrantBoot = &pendingVagrantInfo{
+				name:      name,
+				path:      path,
+				groupPath: groupPath,
+				startTime: time.Now(),
+			}
+		}
 
 		geminiYoloMode := h.newDialog.IsGeminiYoloMode()
 		sandboxMode := h.newDialog.IsSandboxEnabled()
@@ -7485,6 +7513,68 @@ func (h *Home) renderLaunchingState(inst *session.Instance, width int, startTime
 	return b.String()
 }
 
+// renderPendingVagrantBoot renders a yellow-themed boot animation for Vagrant VM provisioning.
+// This shows BEFORE the session instance exists, providing immediate feedback during `vagrant up`.
+func (h *Home) renderPendingVagrantBoot(width int) string {
+	var b strings.Builder
+
+	// Braille spinner frames - creates smooth rotation effect
+	spinnerFrames := []string{"⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"}
+	spinner := spinnerFrames[h.animationFrame]
+
+	// Centered layout
+	centerStyle := lipgloss.NewStyle().
+		Width(width - 4).
+		Align(lipgloss.Center)
+
+	// Spinner with yellow color (Vagrant-themed)
+	spinnerStyle := lipgloss.NewStyle().
+		Foreground(ColorYellow).
+		Bold(true)
+	spinnerLine := spinnerStyle.Render(spinner + "  " + spinner + "  " + spinner)
+	b.WriteString(centerStyle.Render(spinnerLine))
+	b.WriteString("\n\n")
+
+	// Title with emoji
+	titleStyle := lipgloss.NewStyle().
+		Foreground(ColorYellow).
+		Bold(true)
+	b.WriteString(centerStyle.Render(titleStyle.Render("🖥️  Booting Vagrant VM")))
+	b.WriteString("\n\n")
+
+	// Description
+	descStyle := lipgloss.NewStyle().
+		Foreground(ColorText).
+		Italic(true)
+	b.WriteString(centerStyle.Render(descStyle.Render("Provisioning isolated environment...")))
+	b.WriteString("\n\n")
+
+	// Progress dots animation
+	dotsCount := (h.animationFrame % 4) + 1
+	dots := strings.Repeat("●", dotsCount) + strings.Repeat("○", 4-dotsCount)
+	dotsStyle := lipgloss.NewStyle().
+		Foreground(ColorOrange)
+	b.WriteString(centerStyle.Render(dotsStyle.Render(dots)))
+	b.WriteString("\n\n")
+
+	// Session name hint
+	if h.pendingVagrantBoot.name != "" {
+		nameStyle := lipgloss.NewStyle().
+			Foreground(ColorTextDim)
+		b.WriteString(centerStyle.Render(nameStyle.Render("Session: " + h.pendingVagrantBoot.name)))
+		b.WriteString("\n\n")
+	}
+
+	// Elapsed time
+	elapsed := time.Since(h.pendingVagrantBoot.startTime).Round(time.Second)
+	timeStyle := lipgloss.NewStyle().
+		Foreground(ColorYellow).
+		Italic(true)
+	b.WriteString(centerStyle.Render(timeStyle.Render(fmt.Sprintf("Booting... %s", elapsed))))
+
+	return b.String()
+}
+
 // renderMcpLoadingState renders the MCP loading animation in the preview pane
 func (h *Home) renderMcpLoadingState(inst *session.Instance, width int, startTime time.Time) string {
 	var b strings.Builder
@@ -7687,6 +7777,11 @@ func (h *Home) renderPreviewPane(width, height int) string {
 			Subtitle: "Select a session to preview",
 			Hints:    nil,
 		}, width, height)
+	}
+
+	// Pending vagrant boot animation (shows before session is created)
+	if h.pendingVagrantBoot != nil {
+		return h.renderPendingVagrantBoot(width)
 	}
 
 	item := h.flatItems[h.cursor]
