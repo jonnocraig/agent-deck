@@ -1,5 +1,11 @@
 # Architecture Decisions
 
+## 2026-02-27 - Wave 1 Decomposition: 7-File Split Strategy
+
+**Context**: home.go at 9031 lines needed decomposition into kanban component files. Architect agent analyzed all functions, types, and methods to determine optimal file boundaries. Key question: what stays in home.go vs what gets extracted.
+**Decision**: Extract rendering/display logic into 5 files (kanban_board.go, kanban_card.go, kanban_sidebar.go, kanban_detail.go, kanban_nav.go). Create 2 stubs (kanban_transition.go, kanban_conductor.go). Keep in home.go: Home struct, Init/Update/View lifecycle, all message types (xxxMsg), background workers, dialog handlers, session CRUD, persistence. All extracted methods remain `*Home` receivers — they just live in different files.
+**Consequences**: home.go reduced to 6038 lines (~33% reduction). No circular dependencies (all same `package ui`). Stub files use `string` as placeholder for column types until Phase 1 defines `session.KanbanColumn`. Build, test, and vet all pass. Total lines across 8 files: 9185 (~154 lines overhead from file headers/imports).
+
 ## 2026-02-27 - Plan Review: 24 → 28 Tasks with Specific TDD
 
 **Context**: Cross-model review (Gemini 2.5 Pro + Claude Opus 4.6) found 11 gaps in the agent plan vs design doc. Critical: no Bubble Tea message type definitions. High: missing keyboard shortcuts (n/d/K/m), no sort order logic, TDD steps too vague for LLM implementation.

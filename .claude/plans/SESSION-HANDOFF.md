@@ -1,87 +1,85 @@
-# Session Handoff - 2026-02-27 (Session 9 — Plan Review + TDD Enhancement)
+# Session Handoff - 2026-02-27 (Session 10 — Wave 1 Implementation)
 
 ## What Was Accomplished This Session
 
-1. **Cross-model plan review** (Gemini 2.5 Pro via clink + Claude Opus 4.6)
-   - Thorough cross-reference of design doc (740 lines) vs agent plan (877 lines)
-   - Found 1 CRITICAL, 4 HIGH, 3 MEDIUM, 3 LOW issues
-   - Review report: `.claude/plans/agent-teams/2026-02-27-plan-review.md`
+1. **Executed Wave 1: Phase 0 Refactor** via `agentic-ai-implement` skill
+   - Task 0.1: Analyzed home.go extraction boundaries (opus/architect agent)
+     - Complete function-to-file mapping for all 9031 lines
+     - Identified 7 target files with dependency analysis
+     - Zero circular dependency risks (all same `package ui`)
+   - Task 0.2: Executed home.go decomposition (opus/refactor-expert agent)
+     - Created 7 new kanban_*.go files
+     - Extracted ~3000 lines from home.go (9031 → 6038)
+     - All methods remain `*Home` receivers in different files
+   - Task 0.3: Verified functional equivalence
+     - `go build ./...` — passes
+     - `go test ./... -count=1 -short` — all 16 packages pass
+     - `go vet ./...` — clean
 
-2. **Fixed all identified gaps** — plan updated from 24 → 28 tasks:
-   - CRITICAL: Added Task 1.4 — Bubble Tea message types (22 message structs + 2 supporting types in kanban_messages.go)
-   - HIGH: Added Task 1.5 — Sort order calculation + rebalancing (with batch update for performance)
-   - HIGH: Added Tasks 3.3, 3.4 — Missing keyboard handlers (n/d/K/m)
-   - HIGH: Enhanced ALL TDD RED steps with 5-8 specific test cases per task (inputs, outputs, edge cases)
-   - MEDIUM: Added "All Sessions" flat list exception to Task 2.4
-   - MEDIUM: Embedded error handling scenarios from design doc into relevant task steps
-   - LOW: Added YAML config schema, golden file helper, error type definitions
+2. **Decomposition results:**
 
-3. **Fixed design doc** — corrected wrong file path (statedb.go → storage.go/migration.go)
+   | File | Lines | Content |
+   |------|-------|---------|
+   | home.go | 6,038 | Core model, lifecycle, messages, workers |
+   | kanban_board.go | 654 | Layouts, empty state, dimension helpers |
+   | kanban_card.go | 267 | Session item rendering, session list |
+   | kanban_conductor.go | 22 | Stub: Conductor types |
+   | kanban_detail.go | 1,483 | Preview pane, animation states, utilities |
+   | kanban_nav.go | 338 | Help bar (all tiers) |
+   | kanban_sidebar.go | 341 | Group rendering, group preview |
+   | kanban_transition.go | 42 | Stub: TransitionEngine interface |
 
-4. **Validation pass** — Gemini 3.1 Pro confirmed PASS on all fixes, suggested two minor improvements (batch sort update, cancel state test) which were also applied
+## Previous Sessions Summary
 
-## Previous Session (Session 8)
-
-1. **Multi-model design review** via zen MCP consensus
-   - Gemini 3.1 Pro (advocate): 8/10 confidence, validated architecture, KanbanColumn/Status separation, Elm alignment
-   - Gemini 2.5 Pro (challenger, GPT-5.2 was quota-limited): rigorous counter-analysis
-   - Key concern raised: 15-char column width, 3-tier config over-engineering, YOLO reliability risk
-   - User decision: adopt only Phase 0 refactoring (home.go decomposition as separate PR), keep everything else
-
-2. **Updated design document** with Phase 0
-   - Added Phase 0 row to implementation phases table
-   - All subsequent phases now depend on Phase 0
-   - Files created in Phase 0, modified in later phases
-
-3. **Full plan enrichment** via `agentic-ai-plan` skill
-   - 24 tasks across 8 phases (0-7)
-   - 6 execution waves with user checkpoints
-   - Agent orchestration metadata for every task (model, agents, MCP tools, skills, permissions, complexity)
-   - Generated 3 output files: JSON, XML, MD
+- **Session 9**: Plan review (24→28 tasks), TDD test cases enhanced
+- **Session 8**: Multi-model design review, Phase 0 added, plan enrichment (6 waves)
+- **Session 7**: Full kanban mode brainstorm + design document (737 lines)
+- **Sessions 1-6**: Vagrant mode implementation, OAuth, config sync, MCP
 
 ## Current State
 
 - **Branch**: `feature/KanbanMode` (worktree at `.worktrees/feature-KanbanMode`)
-- **Last commit**: `d0e488d` — `docs: add enriched agent plan with Phase 0 refactoring`
-- **Design complete, plan reviewed and enhanced, implementation NOT started**
+- **Last commit**: `b359108` — `docs: enhance agent plan with TDD specifics and missing tasks`
+- **Wave 1 COMPLETE, NOT YET COMMITTED** — 7 new files + home.go modification uncommitted
 - **Tests**: All pass (`go test ./... -count=1 -short`)
-- **Working tree**: Modified (plan review, enhanced plan, design doc fix — needs commit)
-- **Plan**: 28 tasks, 6 waves, specific TDD test cases for every task
+- **Working tree**: 7 untracked files + 1 modified file (home.go)
+- **Plan**: 28 tasks, 6 waves — Wave 1 done, Waves 2-6 pending
 
 ## Important Context
 
-- **Design doc**: `docs/plans/2026-02-27-kanban-mode-design.md` (source of truth, updated with Phase 0)
-- **Agent plan**: `.claude/plans/agent-teams/2026-02-27-kanban-mode-agent-plan.md` (enriched plan with waves)
-- **JSON plan**: `.claude/plans/agent-teams/2026-02-27-kanban-mode-agent-plan.json` (source of truth for agents)
-- **XML plan**: `.claude/plans/agent-teams/2026-02-27-kanban-mode-agent-plan.xml`
-- **home.go is 9031 lines** — Phase 0 decomposes it into 7 kanban_*.go files (separate PR, zero features)
-- **Storage is at `internal/session/storage.go`** (706 lines), NOT statedb.go
-- **Migrations at `internal/session/migration.go`** (230 lines)
-- **Conductor already exists at `internal/session/conductor.go`** (1903 lines) — reference for Phase 6
-- **Instance at `internal/session/instance.go`** (4912 lines) — Phase 1 adds kanban fields here
-- **GPT-5.2 quota exhausted** — OpenAI models unavailable in zen MCP, Gemini models work fine
+- **Design doc**: `docs/plans/2026-02-27-kanban-mode-design.md` (source of truth)
+- **Agent plan (MD)**: `.claude/plans/agent-teams/2026-02-27-kanban-mode-agent-plan.md` (28 tasks, 6 waves)
+- **Agent plan (JSON)**: `.claude/plans/agent-teams/2026-02-27-kanban-mode-agent-plan.json`
+- **home.go is now 6038 lines** (reduced from 9031)
+- **7 kanban_*.go files exist** in `internal/ui/` — 2 stubs + 5 extractions
+- **Stub files use `string` for column types** — Phase 1 will replace with `session.KanbanColumn`
+- **Storage**: `internal/session/storage.go` (706 lines), NOT statedb.go
+- **Migrations**: `internal/session/migration.go` (230 lines)
+- **Conductor**: `internal/session/conductor.go` (1903 lines) — reference for Phase 6
+- **Instance**: `internal/session/instance.go` (4912 lines) — Phase 1 adds kanban fields
+- **User chose Opus for all tasks** (not optimizing for cost)
 - **Build output**: `go build -o build/agent-deck ./cmd/agent-deck/` (ALWAYS rebuild before testing)
 
 ## Wave Execution Summary
 
-| Wave | Name | Tasks | Parallelism | Key Output |
-|------|------|-------|-------------|------------|
-| 1 | Foundation | 3 | 1 (sequential) | home.go decomposed → separate PR |
-| 2 | Data Layer | 5 | 2 parallel + 2 parallel + 1 | SQLite migration, Instance fields, CRUD, messages, sort order |
-| 3 | Board UI | 4 | 3 parallel + 1 | 6-column board, cards, sidebar |
-| 4 | Nav & Detail | 6 | 2×2 parallel + 2 | h/j/k/l cursor, detail panel, edit mode, n/d/m keys |
-| 5 | Transitions | 3 | sequential | TransitionEngine, 3-tier config, rollback |
-| 6 | Automation | 7 | 1 + 6 parallel | Conductor, consensus gates, 4 skills |
+| Wave | Name | Tasks | Status | Key Output |
+|------|------|-------|--------|------------|
+| 1 | Foundation | 3 | COMPLETE (uncommitted) | home.go decomposed → 7 kanban_*.go files |
+| 2 | Data Layer | 5 | PENDING | SQLite migration, Instance fields, CRUD, messages, sort order |
+| 3 | Board UI | 4 | PENDING | 6-column board, cards, sidebar |
+| 4 | Nav & Detail | 6 | PENDING | h/j/k/l cursor, detail panel, edit mode, n/d/m keys |
+| 5 | Transitions | 3 | PENDING | TransitionEngine, 3-tier config, rollback |
+| 6 | Automation | 7 | PENDING | Conductor, consensus gates, 4 skills |
 
 ## Next Steps (in order)
 
-1. **Commit plan files** — commit the 3 agent plan files + design doc update
-2. **Execute Wave 1: Phase 0 Refactor** — use `agentic-ai-implement` or manual agents
-   - Task 0.1: Analyze home.go (opus/architect)
-   - Task 0.2: Execute decomposition (sonnet/refactor-expert)
-   - Task 0.3: Verify equivalence (haiku/build-error-resolver)
+1. **Commit Wave 1 changes** — commit the 7 new files + home.go modification
+2. **Run quality gates** — code-review agent on the decomposition
 3. **Create PR for Phase 0** — merge before proceeding to Wave 2
-4. **Execute Wave 2: Data Layer** — tasks 1.1 ‖ 1.2, then 1.3
+4. **Execute Wave 2: Data Layer** — use `agentic-ai-implement` skill
+   - Tasks 1.1 ‖ 1.2 (parallel): KanbanColumn type + SQLite migrations
+   - Tasks 1.3 ‖ 1.4 (parallel): CRUD methods + Bubble Tea messages
+   - Task 1.5 (sequential): Sort order calculation
 5. Continue waves 3-6 per the plan
 
 ## Commands to Run First
@@ -89,5 +87,6 @@
 ```bash
 go test ./... -count=1 -short                          # verify tests pass
 go build -o build/agent-deck ./cmd/agent-deck/         # rebuild binary
-cat .claude/plans/agent-teams/2026-02-27-kanban-mode-agent-plan.md  # review enriched plan
+wc -l internal/ui/home.go internal/ui/kanban_*.go      # verify decomposition
+cat .claude/plans/agent-teams/2026-02-27-kanban-mode-agent-plan.md  # review plan
 ```

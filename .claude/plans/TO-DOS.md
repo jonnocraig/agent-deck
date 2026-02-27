@@ -3,16 +3,14 @@
 ## In Progress
 
 - [ ] **Kanban Mode Feature** (design: `docs/plans/2026-02-27-kanban-mode-design.md`)
-  - [x] Brainstorm with 5-perspective agent team (Architect, Implementer, Devil's Advocate, User Advocate, Skill Designer)
-  - [x] Clone and analyze 3 reference repos (agtx, vibe-kanban, claude-vibekanban)
-  - [x] Read Anthropic skill best practices
-  - [x] Read zen/PAL MCP consensus best practices
+  - [x] Brainstorm with 5-perspective agent team
+  - [x] Clone and analyze 3 reference repos
   - [x] Write full design document (737 lines)
-  - [x] Commit design document
-  - [x] Multi-model design review (Gemini 3.1 Pro advocate, Gemini 2.5 Pro challenger)
-  - [x] Adopt Phase 0 refactoring from review feedback
-  - [x] Create implementation plan (`agentic-ai-plan`) — 24 tasks, 6 waves
-  - [ ] **Phase 0: Refactor** — Decompose home.go (separate PR, zero features, functionally identical)
+  - [x] Multi-model design review + Phase 0 adoption
+  - [x] Create implementation plan — 28 tasks, 6 waves
+  - [x] Cross-model plan review + TDD enhancement
+  - [x] **Phase 0: Refactor** — home.go decomposed into 7 kanban_*.go files (DONE, needs commit+PR)
+  - [ ] **Commit + PR for Phase 0** — commit the decomposition, create PR, merge before Wave 2
   - [ ] **Phase 1: Data Layer** — SQLite migration, Instance fields, GroupKanbanConfig
   - [ ] **Phase 2: Board UI** — KanbanBoard, KanbanCard, KanbanSidebar rendering
   - [ ] **Phase 3: Navigation** — KanbanNav 2D cursor, Tab focus, column jump, scroll
@@ -21,54 +19,21 @@
   - [ ] **Phase 6: Conductor** — YOLO mode, zen consensus gates, conductor lifecycle
   - [ ] **Phase 7: Skills** — 4 new skills (backlog, review, done, self-evolve)
 
-## Completed This Session (2026-02-27 — Plan Review + TDD Enhancement)
+## Completed This Session (2026-02-27 — Wave 1 Implementation)
 
-- [x] Cross-model plan review (Gemini 2.5 Pro via clink + Claude Opus 4.6)
-- [x] Found 1 CRITICAL, 4 HIGH, 3 MEDIUM, 3 LOW issues in plan vs design doc
-- [x] Added Task 1.4: Bubble Tea message types (22 structs in kanban_messages.go)
-- [x] Added Task 1.5: Sort order calculation + rebalancing with batch DB update
-- [x] Added Tasks 3.3, 3.4: Missing n/d/K/m keyboard handlers
-- [x] Enhanced ALL TDD RED steps with 5-8 specific test cases per task
-- [x] Added "All Sessions" flat list exception to Task 2.4
-- [x] Embedded error handling scenarios from design doc into task steps
-- [x] Added YAML config schema to Task 5.2
-- [x] Added golden file test helper to Task 0.3
-- [x] Added error types (TransitionError, SkillFailedError, RollbackError) to Task 5.1
-- [x] Fixed design doc wrong file path: statedb.go → storage.go/migration.go
-- [x] Validation pass by Gemini 3.1 Pro: PASS verdict
-- [x] Applied Gemini's refinements: batch sort update, cancel-restores-state test
-- [x] Updated plan from 24 → 28 tasks
-
-## Completed Previous Session (2026-02-27 — Design Review + Plan Enrichment)
-
-- [x] Ran multi-model design review via zen consensus (Gemini 3.1 Pro + Gemini 2.5 Pro)
-- [x] GPT-5.2 quota exhausted — used Gemini 2.5 Pro as challenger instead
-- [x] Gemini 3.1 Pro: 8/10 confidence, validated KanbanColumn/Status separation, Elm alignment, component decomposition
-- [x] Gemini 2.5 Pro: challenged scope, terminal width, 3-tier config, YOLO reliability, self-evolve value
-- [x] User adopted only Phase 0 (home.go refactoring as separate PR), kept all other design elements
-- [x] Updated design doc with Phase 0 in implementation phases table
-- [x] Updated session handoff and todos with Phase 0
-- [x] Ran agentic-ai-plan skill to enrich plan
-- [x] Confirmed correct file paths: storage.go (not statedb.go), migration.go, conductor.go already exists
-- [x] Generated 24 tasks across 8 phases with agent orchestration metadata
-- [x] Assigned 6 execution waves with user checkpoints and quality gates
-- [x] Wrote 3 output files (JSON, XML, MD) to .claude/plans/agent-teams/
+- [x] Task 0.1: Analyzed home.go extraction boundaries (opus/architect)
+- [x] Task 0.2: Executed home.go decomposition — 7 new files created, home.go 9031→6038 lines
+- [x] Task 0.3: Verified functional equivalence — build, test, vet all pass
+- [x] Wave 1 quality gates: build-check pass, vet-check pass, test-suite pass (16/16 packages)
 
 ## Completed Previous Sessions
 
+- [x] Plan review + TDD enhancement (session 9)
+- [x] Design review + plan enrichment (session 8)
 - [x] Full kanban mode design brainstorm (session 7)
 - [x] Design document written and committed (97a87a4)
-- [x] User profile sync design (brainstorm + design doc)
-- [x] OAuth credential forwarding (oauth.go, sync step 5, CLAUDE_CODE_OAUTH_TOKEN)
-- [x] Config stripping (stripHostOnlyFields, stripSettingsForVM, stripJSONKeys)
-- [x] PATH provisioning (~/.local/bin, claude symlink)
-- [x] Skill rewrite (operating-in-vagrant) + directory format fix
-- [x] CLAUDE.md pre-loading in VM
-- [x] MCP in VM (stripMCPServers, WriteMCPJsonForVagrant)
-- [x] buildVagrantClaudeCommand (tmux-free)
-- [x] [Vagrant] badge
+- [x] User profile sync design
 - [x] Full vagrant mode implementation (33 files, 8051 lines)
-- [x] Project CLAUDE.md with rebuild-before-testing rule
 
 ## Pending
 
