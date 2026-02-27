@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"fmt"
+
 	"github.com/asheshgoplani/agent-deck/internal/session"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -280,6 +282,9 @@ func (p *ClaudeOptionsPanel) viewForkMode(_, _, _, headerStyle lipgloss.Style) s
 	if p.skipPermissions {
 		content += renderIndentedCheckboxLine("YOLO (sudo perms inside Vagrant VM)", p.useVagrantMode, p.focusIndex == focusIdx)
 		focusIdx++
+		if p.useVagrantMode {
+			content += renderVagrantSettingsSummary()
+		}
 	}
 
 	// Chrome checkbox
@@ -327,6 +332,9 @@ func (p *ClaudeOptionsPanel) viewNewMode(_, activeStyle, _, headerStyle lipgloss
 	if p.skipPermissions {
 		content += renderIndentedCheckboxLine("YOLO (sudo perms inside Vagrant VM)", p.useVagrantMode, p.focusIndex == focusIdx)
 		focusIdx++
+		if p.useVagrantMode {
+			content += renderVagrantSettingsSummary()
+		}
 	}
 
 	// Chrome checkbox
@@ -376,6 +384,29 @@ func renderIndentedCheckboxLine(label string, checked, focused bool) string {
 		return "  " + activeStyle.Render("▶ ") + cb + " " + label + "\n"
 	}
 	return "    " + cb + " " + labelStyle.Render(label) + "\n"
+}
+
+// renderVagrantSettingsSummary renders a compact summary of active vagrant settings
+// below the YOLO checkbox. Shows memory, CPUs, and box in dim text.
+func renderVagrantSettingsSummary() string {
+	settings := session.GetVagrantSettings()
+	dimStyle := lipgloss.NewStyle().Foreground(ColorComment)
+
+	memory := settings.MemoryMB
+	if memory <= 0 {
+		memory = 16384
+	}
+	cpus := settings.CPUs
+	if cpus <= 0 {
+		cpus = 2
+	}
+	box := settings.Box
+	if box == "" {
+		box = "bento/ubuntu-24.04"
+	}
+
+	summary := fmt.Sprintf("Memory: %d MB | CPUs: %d | Box: %s", memory, cpus, box)
+	return "      " + dimStyle.Render(summary) + "\n"
 }
 
 // renderRadio renders a radio button (•) or ( )
