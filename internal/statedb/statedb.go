@@ -15,7 +15,7 @@ import (
 
 // SchemaVersion tracks the current database schema version.
 // Bump this when adding migrations.
-const SchemaVersion = 1
+const SchemaVersion = 2
 
 // StateDB wraps a SQLite database for session/group persistence.
 // Thread-safe for concurrent use from multiple goroutines within one process.
@@ -44,6 +44,15 @@ type InstanceRow struct {
 	WorktreeRepo    string
 	WorktreeBranch  string
 	ToolData        json.RawMessage // JSON blob for tool-specific data
+
+	// Kanban board fields (v2 schema)
+	KanbanColumn    *string `json:"kanban_column,omitempty"`    // nullable - nil means not on kanban
+	KanbanSortOrder int     `json:"kanban_sort_order"`
+	KanbanLastMoved *int64  `json:"kanban_last_moved,omitempty"` // Unix timestamp, nullable
+	Description     string  `json:"description"`
+	AcceptCriteria  string  `json:"accept_criteria"`
+	AutomationMode  string  `json:"automation_mode"`     // "interactive" or "yolo"
+	YOLOConfigJSON  *string `json:"yolo_config,omitempty"` // JSON string, nullable
 }
 
 // GroupRow represents a group row in the database.
@@ -60,6 +69,24 @@ type StatusRow struct {
 	Status       string
 	Tool         string
 	Acknowledged bool
+}
+
+// GroupKanbanConfigRow represents kanban config for a group.
+type GroupKanbanConfigRow struct {
+	GroupPath     string
+	KanbanEnabled bool
+	CreatedAt     int64
+	UpdatedAt     int64
+}
+
+// ColumnSkillMappingRow represents a skill mapping for a kanban column.
+type ColumnSkillMappingRow struct {
+	ID             int
+	GroupPath      string
+	ColumnName     string
+	SkillName      string
+	AutoTrigger    bool
+	TriggerOnEnter bool
 }
 
 // global singleton for cross-package access (status writes from background worker)
@@ -196,11 +223,68 @@ func (s *StateDB) Migrate() error {
 		return fmt.Errorf("statedb: create heartbeats: %w", err)
 	}
 
+	// Read existing schema version for conditional migrations
+	var existingVersionStr string
+	err = tx.QueryRow(`SELECT value FROM metadata WHERE key = 'schema_version'`).Scan(&existingVersionStr)
+	existingVersion := 0
+	if err == nil {
+		fmt.Sscanf(existingVersionStr, "%d", &existingVersion)
+	}
+
+	// Schema v2: Kanban board support
+	if existingVersion < 2 {
+		// Add columns to instances table
+		alterStatements := []string{
+			`ALTER TABLE instances ADD COLUMN kanban_column TEXT`,
+			`ALTER TABLE instances ADD COLUMN kanban_sort_order INTEGER NOT NULL DEFAULT 0`,
+			`ALTER TABLE instances ADD COLUMN kanban_last_moved INTEGER`,
+			`ALTER TABLE instances ADD COLUMN description TEXT NOT NULL DEFAULT ''`,
+			`ALTER TABLE instances ADD COLUMN accept_criteria TEXT NOT NULL DEFAULT ''`,
+			`ALTER TABLE instances ADD COLUMN automation_mode TEXT NOT NULL DEFAULT 'interactive'`,
+			`ALTER TABLE instances ADD COLUMN yolo_config TEXT`,
+		}
+		for _, stmt := range alterStatements {
+			if _, err := tx.Exec(stmt); err != nil {
+				// Column may already exist if partial migration occurred
+				if !strings.Contains(err.Error(), "duplicate column") {
+					return fmt.Errorf("statedb: alter instances: %w", err)
+				}
+			}
+		}
+
+		// Create group_kanban_configs table
+		if _, err := tx.Exec(`
+			CREATE TABLE IF NOT EXISTS group_kanban_configs (
+				group_path     TEXT PRIMARY KEY,
+				kanban_enabled INTEGER NOT NULL DEFAULT 0,
+				created_at     INTEGER NOT NULL,
+				updated_at     INTEGER NOT NULL
+			)
+		`); err != nil {
+			return fmt.Errorf("statedb: create group_kanban_configs: %w", err)
+		}
+
+		// Create column_skill_mappings table
+		if _, err := tx.Exec(`
+			CREATE TABLE IF NOT EXISTS column_skill_mappings (
+				id              INTEGER PRIMARY KEY AUTOINCREMENT,
+				group_path      TEXT NOT NULL,
+				column_name     TEXT NOT NULL,
+				skill_name      TEXT NOT NULL,
+				auto_trigger    INTEGER NOT NULL DEFAULT 0,
+				trigger_on_enter INTEGER NOT NULL DEFAULT 1,
+				UNIQUE(group_path, column_name)
+			)
+		`); err != nil {
+			return fmt.Errorf("statedb: create column_skill_mappings: %w", err)
+		}
+	}
+
 	// Set schema version only when missing or changed.
 	// Avoiding a write on every open reduces lock contention between CLI processes.
 	schemaVersion := fmt.Sprintf("%d", SchemaVersion)
-	var existingVersion string
-	err = tx.QueryRow(`SELECT value FROM metadata WHERE key = 'schema_version'`).Scan(&existingVersion)
+	var currentVersion string
+	err = tx.QueryRow(`SELECT value FROM metadata WHERE key = 'schema_version'`).Scan(&currentVersion)
 	switch {
 	case err == sql.ErrNoRows:
 		if _, err := tx.Exec(`
@@ -210,7 +294,7 @@ func (s *StateDB) Migrate() error {
 		}
 	case err != nil:
 		return fmt.Errorf("statedb: read schema version: %w", err)
-	case existingVersion != schemaVersion:
+	case currentVersion != schemaVersion:
 		if _, err := tx.Exec(`
 			UPDATE metadata SET value = ? WHERE key = 'schema_version'
 		`, schemaVersion); err != nil {
@@ -240,20 +324,39 @@ func (s *StateDB) SaveInstance(inst *InstanceRow) error {
 		toolData = json.RawMessage("{}")
 	}
 
+	var kanbanCol any = nil
+	if inst.KanbanColumn != nil {
+		kanbanCol = *inst.KanbanColumn
+	}
+
+	var kanbanMoved any = nil
+	if inst.KanbanLastMoved != nil {
+		kanbanMoved = *inst.KanbanLastMoved
+	}
+
+	var yoloConfig any = nil
+	if inst.YOLOConfigJSON != nil {
+		yoloConfig = *inst.YOLOConfigJSON
+	}
+
 	_, err := s.db.Exec(`
 		INSERT OR REPLACE INTO instances (
 			id, title, project_path, group_path, sort_order,
 			command, wrapper, tool, status, tmux_session,
 			created_at, last_accessed,
 			parent_session_id, worktree_path, worktree_repo, worktree_branch,
-			tool_data
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			tool_data,
+			kanban_column, kanban_sort_order, kanban_last_moved,
+			description, accept_criteria, automation_mode, yolo_config
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		inst.ID, inst.Title, inst.ProjectPath, inst.GroupPath, inst.Order,
 		inst.Command, inst.Wrapper, inst.Tool, inst.Status, inst.TmuxSession,
 		inst.CreatedAt.Unix(), inst.LastAccessed.Unix(),
 		inst.ParentSessionID, inst.WorktreePath, inst.WorktreeRepo, inst.WorktreeBranch,
 		string(toolData),
+		kanbanCol, inst.KanbanSortOrder, kanbanMoved,
+		inst.Description, inst.AcceptCriteria, inst.AutomationMode, yoloConfig,
 	)
 	return err
 }
@@ -292,8 +395,10 @@ func (s *StateDB) SaveInstances(insts []*InstanceRow) error {
 			command, wrapper, tool, status, tmux_session,
 			created_at, last_accessed,
 			parent_session_id, worktree_path, worktree_repo, worktree_branch,
-			tool_data
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			tool_data,
+			kanban_column, kanban_sort_order, kanban_last_moved,
+			description, accept_criteria, automation_mode, yolo_config
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
 		return err
@@ -305,12 +410,30 @@ func (s *StateDB) SaveInstances(insts []*InstanceRow) error {
 		if len(toolData) == 0 {
 			toolData = json.RawMessage("{}")
 		}
+
+		var kanbanCol any = nil
+		if inst.KanbanColumn != nil {
+			kanbanCol = *inst.KanbanColumn
+		}
+
+		var kanbanMoved any = nil
+		if inst.KanbanLastMoved != nil {
+			kanbanMoved = *inst.KanbanLastMoved
+		}
+
+		var yoloConfig any = nil
+		if inst.YOLOConfigJSON != nil {
+			yoloConfig = *inst.YOLOConfigJSON
+		}
+
 		if _, err := stmt.Exec(
 			inst.ID, inst.Title, inst.ProjectPath, inst.GroupPath, inst.Order,
 			inst.Command, inst.Wrapper, inst.Tool, inst.Status, inst.TmuxSession,
 			inst.CreatedAt.Unix(), inst.LastAccessed.Unix(),
 			inst.ParentSessionID, inst.WorktreePath, inst.WorktreeRepo, inst.WorktreeBranch,
 			string(toolData),
+			kanbanCol, inst.KanbanSortOrder, kanbanMoved,
+			inst.Description, inst.AcceptCriteria, inst.AutomationMode, yoloConfig,
 		); err != nil {
 			return err
 		}
@@ -326,7 +449,9 @@ func (s *StateDB) LoadInstances() ([]*InstanceRow, error) {
 			command, wrapper, tool, status, tmux_session,
 			created_at, last_accessed,
 			parent_session_id, worktree_path, worktree_repo, worktree_branch,
-			tool_data
+			tool_data,
+			kanban_column, kanban_sort_order, kanban_last_moved,
+			description, accept_criteria, automation_mode, yolo_config
 		FROM instances ORDER BY sort_order
 	`)
 	if err != nil {
@@ -339,20 +464,37 @@ func (s *StateDB) LoadInstances() ([]*InstanceRow, error) {
 		r := &InstanceRow{}
 		var createdUnix, accessedUnix int64
 		var toolDataStr string
+		var kanbanCol, yoloConfigStr sql.NullString
+		var kanbanMoved sql.NullInt64
+
 		if err := rows.Scan(
 			&r.ID, &r.Title, &r.ProjectPath, &r.GroupPath, &r.Order,
 			&r.Command, &r.Wrapper, &r.Tool, &r.Status, &r.TmuxSession,
 			&createdUnix, &accessedUnix,
 			&r.ParentSessionID, &r.WorktreePath, &r.WorktreeRepo, &r.WorktreeBranch,
 			&toolDataStr,
+			&kanbanCol, &r.KanbanSortOrder, &kanbanMoved,
+			&r.Description, &r.AcceptCriteria, &r.AutomationMode, &yoloConfigStr,
 		); err != nil {
 			return nil, err
 		}
+
 		r.CreatedAt = time.Unix(createdUnix, 0)
 		if accessedUnix > 0 {
 			r.LastAccessed = time.Unix(accessedUnix, 0)
 		}
 		r.ToolData = json.RawMessage(toolDataStr)
+
+		if kanbanCol.Valid {
+			r.KanbanColumn = &kanbanCol.String
+		}
+		if kanbanMoved.Valid {
+			r.KanbanLastMoved = &kanbanMoved.Int64
+		}
+		if yoloConfigStr.Valid {
+			r.YOLOConfigJSON = &yoloConfigStr.String
+		}
+
 		result = append(result, r)
 	}
 	return result, rows.Err()
@@ -589,6 +731,122 @@ func (s *StateDB) ResignPrimary() error {
 	_, err := s.db.Exec(
 		"UPDATE instance_heartbeats SET is_primary = 0 WHERE pid = ?",
 		s.pid,
+	)
+	return err
+}
+
+// --- Kanban Config CRUD ---
+
+// SaveGroupKanbanConfig inserts or updates a group's kanban configuration.
+func (s *StateDB) SaveGroupKanbanConfig(config *GroupKanbanConfigRow) error {
+	enabled := 0
+	if config.KanbanEnabled {
+		enabled = 1
+	}
+	_, err := s.db.Exec(`
+		INSERT OR REPLACE INTO group_kanban_configs (group_path, kanban_enabled, created_at, updated_at)
+		VALUES (?, ?, ?, ?)
+	`, config.GroupPath, enabled, config.CreatedAt, config.UpdatedAt)
+	return err
+}
+
+// LoadGroupKanbanConfig retrieves a group's kanban config. Returns nil if not found.
+func (s *StateDB) LoadGroupKanbanConfig(groupPath string) (*GroupKanbanConfigRow, error) {
+	var config GroupKanbanConfigRow
+	var enabled int
+	err := s.db.QueryRow(`
+		SELECT group_path, kanban_enabled, created_at, updated_at
+		FROM group_kanban_configs WHERE group_path = ?
+	`, groupPath).Scan(&config.GroupPath, &enabled, &config.CreatedAt, &config.UpdatedAt)
+
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	config.KanbanEnabled = enabled != 0
+	return &config, nil
+}
+
+// LoadAllGroupKanbanConfigs returns all group kanban configurations.
+func (s *StateDB) LoadAllGroupKanbanConfigs() ([]*GroupKanbanConfigRow, error) {
+	rows, err := s.db.Query(`
+		SELECT group_path, kanban_enabled, created_at, updated_at
+		FROM group_kanban_configs
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []*GroupKanbanConfigRow
+	for rows.Next() {
+		var config GroupKanbanConfigRow
+		var enabled int
+		if err := rows.Scan(&config.GroupPath, &enabled, &config.CreatedAt, &config.UpdatedAt); err != nil {
+			return nil, err
+		}
+		config.KanbanEnabled = enabled != 0
+		result = append(result, &config)
+	}
+	return result, rows.Err()
+}
+
+// SaveColumnSkillMapping inserts or updates a column skill mapping.
+// Uses UNIQUE constraint on (group_path, column_name) for upsert behavior.
+func (s *StateDB) SaveColumnSkillMapping(mapping *ColumnSkillMappingRow) error {
+	autoTrigger := 0
+	if mapping.AutoTrigger {
+		autoTrigger = 1
+	}
+	triggerOnEnter := 0
+	if mapping.TriggerOnEnter {
+		triggerOnEnter = 1
+	}
+
+	_, err := s.db.Exec(`
+		INSERT OR REPLACE INTO column_skill_mappings
+		(group_path, column_name, skill_name, auto_trigger, trigger_on_enter)
+		VALUES (?, ?, ?, ?, ?)
+	`, mapping.GroupPath, mapping.ColumnName, mapping.SkillName, autoTrigger, triggerOnEnter)
+	return err
+}
+
+// LoadColumnSkillMappings returns all column skill mappings for a group.
+func (s *StateDB) LoadColumnSkillMappings(groupPath string) ([]*ColumnSkillMappingRow, error) {
+	rows, err := s.db.Query(`
+		SELECT id, group_path, column_name, skill_name, auto_trigger, trigger_on_enter
+		FROM column_skill_mappings WHERE group_path = ?
+	`, groupPath)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []*ColumnSkillMappingRow
+	for rows.Next() {
+		var mapping ColumnSkillMappingRow
+		var autoTrigger, triggerOnEnter int
+		if err := rows.Scan(
+			&mapping.ID, &mapping.GroupPath, &mapping.ColumnName,
+			&mapping.SkillName, &autoTrigger, &triggerOnEnter,
+		); err != nil {
+			return nil, err
+		}
+		mapping.AutoTrigger = autoTrigger != 0
+		mapping.TriggerOnEnter = triggerOnEnter != 0
+		result = append(result, &mapping)
+	}
+	return result, rows.Err()
+}
+
+// DeleteColumnSkillMapping removes a column skill mapping.
+func (s *StateDB) DeleteColumnSkillMapping(groupPath, columnName string) error {
+	_, err := s.db.Exec(
+		"DELETE FROM column_skill_mappings WHERE group_path = ? AND column_name = ?",
+		groupPath, columnName,
 	)
 	return err
 }

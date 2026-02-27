@@ -2539,3 +2539,194 @@ func TestCurrentComposerPrompt_UsesBottomComposerBlock(t *testing.T) {
 		t.Fatalf("unexpected composer prompt.\nwant: %q\ngot:  %q", want, got)
 	}
 }
+
+// TestKanbanColumnValid tests that all 6 valid KanbanColumn values are accepted
+func TestKanbanColumnValid(t *testing.T) {
+	validColumns := []struct {
+		name     string
+		value    string
+		expected KanbanColumn
+	}{
+		{"backlog", "backlog", KanbanBacklog},
+		{"design", "design", KanbanDesign},
+		{"plan", "plan", KanbanPlan},
+		{"implement", "implement", KanbanImplement},
+		{"review", "review", KanbanReview},
+		{"done", "done", KanbanDone},
+	}
+
+	for _, tc := range validColumns {
+		t.Run(tc.name, func(t *testing.T) {
+			col, err := ParseKanbanColumn(tc.value)
+			require.NoError(t, err)
+			require.Equal(t, tc.expected, col)
+			require.True(t, col.IsValid())
+		})
+	}
+}
+
+// TestKanbanColumnInvalid tests that invalid values return errors
+func TestKanbanColumnInvalid(t *testing.T) {
+	invalidColumns := []struct {
+		name  string
+		value string
+	}{
+		{"empty string", ""},
+		{"unknown", "unknown"},
+		{"uppercase BACKLOG", "BACKLOG"},
+		{"planning instead of plan", "planning"},
+		{"mixed case", "Backlog"},
+	}
+
+	for _, tc := range invalidColumns {
+		t.Run(tc.name, func(t *testing.T) {
+			col, err := ParseKanbanColumn(tc.value)
+			require.Error(t, err)
+			require.Equal(t, KanbanColumn(""), col)
+		})
+	}
+}
+
+// TestKanbanColumnString tests that each constant returns its lowercase string representation
+func TestKanbanColumnString(t *testing.T) {
+	tests := []struct {
+		column   KanbanColumn
+		expected string
+	}{
+		{KanbanBacklog, "backlog"},
+		{KanbanDesign, "design"},
+		{KanbanPlan, "plan"},
+		{KanbanImplement, "implement"},
+		{KanbanReview, "review"},
+		{KanbanDone, "done"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.expected, func(t *testing.T) {
+			require.Equal(t, tc.expected, tc.column.String())
+		})
+	}
+}
+
+// TestParseKanbanColumn tests round-trip parsing
+func TestParseKanbanColumn(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected KanbanColumn
+		hasError bool
+	}{
+		{"backlog", KanbanBacklog, false},
+		{"design", KanbanDesign, false},
+		{"plan", KanbanPlan, false},
+		{"implement", KanbanImplement, false},
+		{"review", KanbanReview, false},
+		{"done", KanbanDone, false},
+		{"invalid", KanbanColumn(""), true},
+		{"", KanbanColumn(""), true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.input, func(t *testing.T) {
+			col, err := ParseKanbanColumn(tc.input)
+			if tc.hasError {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, tc.expected, col)
+			}
+		})
+	}
+}
+
+// TestKanbanColumnOrder tests that column index is correct
+func TestKanbanColumnOrder(t *testing.T) {
+	tests := []struct {
+		column        KanbanColumn
+		expectedIndex int
+	}{
+		{KanbanBacklog, 0},
+		{KanbanDesign, 1},
+		{KanbanPlan, 2},
+		{KanbanImplement, 3},
+		{KanbanReview, 4},
+		{KanbanDone, 5},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.column.String(), func(t *testing.T) {
+			require.Equal(t, tc.expectedIndex, tc.column.Index())
+		})
+	}
+}
+
+// TestInstanceKanbanFieldDefaults tests that new Instance has proper kanban defaults
+func TestInstanceKanbanFieldDefaults(t *testing.T) {
+	inst := NewInstance("test-kanban", "/tmp")
+
+	require.Nil(t, inst.KanbanColumn)
+	require.Equal(t, 0, inst.KanbanSortOrder)
+	require.Nil(t, inst.KanbanLastMoved)
+	require.Equal(t, "", inst.Description)
+	require.Equal(t, "", inst.AcceptCriteria)
+	require.Equal(t, AutomationMode(""), inst.AutomationMode)
+	require.Nil(t, inst.YOLOConfig)
+}
+
+// TestAutomationModeValid tests that "interactive" and "yolo" are valid
+func TestAutomationModeValid(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected AutomationMode
+		hasError bool
+	}{
+		{"interactive", "interactive", AutomationInteractive, false},
+		{"yolo", "yolo", AutomationYOLO, false},
+		{"empty defaults to interactive", "", AutomationInteractive, false},
+		{"invalid", "invalid", AutomationMode(""), true},
+		{"uppercase YOLO", "YOLO", AutomationMode(""), true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mode, err := ParseAutomationMode(tc.input)
+			if tc.hasError {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, tc.expected, mode)
+				require.True(t, mode.IsValid())
+			}
+		})
+	}
+}
+
+// TestYOLOConfigJSON tests that YOLOConfig serializes to/from JSON correctly
+func TestYOLOConfigJSON(t *testing.T) {
+	config := &YOLOConfig{
+		ConsensusModels: []string{"gpt-5.2", "gemini-3.1-pro-preview"},
+		PassThreshold:   0.75,
+		PauseOnFail:     true,
+		MaxRetries:      3,
+		SkipColumns:     []string{"design", "review"},
+		ContinuationID:  "test-continuation-123",
+	}
+
+	// Marshal to JSON
+	data, err := config.MarshalJSON()
+	require.NoError(t, err)
+	require.NotEmpty(t, data)
+
+	// Unmarshal back
+	var decoded YOLOConfig
+	err = decoded.UnmarshalJSON(data)
+	require.NoError(t, err)
+
+	// Verify fields
+	require.Equal(t, config.ConsensusModels, decoded.ConsensusModels)
+	require.Equal(t, config.PassThreshold, decoded.PassThreshold)
+	require.Equal(t, config.PauseOnFail, decoded.PauseOnFail)
+	require.Equal(t, config.MaxRetries, decoded.MaxRetries)
+	require.Equal(t, config.SkipColumns, decoded.SkipColumns)
+	require.Equal(t, config.ContinuationID, decoded.ContinuationID)
+}

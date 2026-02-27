@@ -609,3 +609,604 @@ func TestGlobalSingleton(t *testing.T) {
 		t.Error("Expected nil after clearing")
 	}
 }
+
+// --- Kanban Migration Tests (Schema v2) ---
+
+func TestMigrationV2_FreshDB(t *testing.T) {
+	db := newTestDB(t)
+
+	// Verify schema version is 2
+	version, err := db.GetMeta("schema_version")
+	if err != nil {
+		t.Fatalf("GetMeta: %v", err)
+	}
+	if version != "2" {
+		t.Errorf("Expected schema version 2, got %q", version)
+	}
+
+	// Verify new columns exist by inserting an instance with kanban fields
+	now := time.Now()
+	col := "todo"
+	desc := "Fix login bug"
+	ac := "User can log in successfully"
+	mode := "yolo"
+	yoloJSON := `{"auto_approve":true}`
+	movedAt := now.Unix()
+
+	inst := &InstanceRow{
+		ID:              "kanban-test",
+		Title:           "Kanban Test",
+		ProjectPath:     "/tmp/kanban",
+		GroupPath:       "grp",
+		Tool:            "claude",
+		Status:          "idle",
+		CreatedAt:       now,
+		ToolData:        json.RawMessage("{}"),
+		KanbanColumn:    &col,
+		KanbanSortOrder: 3,
+		KanbanLastMoved: &movedAt,
+		Description:     desc,
+		AcceptCriteria:  ac,
+		AutomationMode:  mode,
+		YOLOConfigJSON:  &yoloJSON,
+	}
+
+	if err := db.SaveInstance(inst); err != nil {
+		t.Fatalf("SaveInstance with kanban fields: %v", err)
+	}
+
+	// Load and verify
+	loaded, err := db.LoadInstances()
+	if err != nil {
+		t.Fatalf("LoadInstances: %v", err)
+	}
+	if len(loaded) != 1 {
+		t.Fatalf("Expected 1 instance, got %d", len(loaded))
+	}
+
+	l := loaded[0]
+	if l.KanbanColumn == nil || *l.KanbanColumn != "todo" {
+		t.Errorf("KanbanColumn: %v", l.KanbanColumn)
+	}
+	if l.KanbanSortOrder != 3 {
+		t.Errorf("KanbanSortOrder: %d", l.KanbanSortOrder)
+	}
+	if l.KanbanLastMoved == nil || *l.KanbanLastMoved != movedAt {
+		t.Errorf("KanbanLastMoved: %v", l.KanbanLastMoved)
+	}
+	if l.Description != desc {
+		t.Errorf("Description: %q", l.Description)
+	}
+	if l.AcceptCriteria != ac {
+		t.Errorf("AcceptCriteria: %q", l.AcceptCriteria)
+	}
+	if l.AutomationMode != mode {
+		t.Errorf("AutomationMode: %q", l.AutomationMode)
+	}
+	if l.YOLOConfigJSON == nil || *l.YOLOConfigJSON != yoloJSON {
+		t.Errorf("YOLOConfigJSON: %v", l.YOLOConfigJSON)
+	}
+
+	// Verify new tables exist
+	var count int
+	err = db.DB().QueryRow("SELECT COUNT(*) FROM group_kanban_configs").Scan(&count)
+	if err != nil {
+		t.Errorf("group_kanban_configs table doesn't exist: %v", err)
+	}
+
+	err = db.DB().QueryRow("SELECT COUNT(*) FROM column_skill_mappings").Scan(&count)
+	if err != nil {
+		t.Errorf("column_skill_mappings table doesn't exist: %v", err)
+	}
+}
+
+func TestMigrationV2_ExistingData(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "state.db")
+
+	// Create v1 database
+	db1, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	// Manually create v1 schema (without kanban fields)
+	tx, _ := db1.DB().Begin()
+	tx.Exec(`CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)`)
+	tx.Exec(`INSERT INTO metadata (key, value) VALUES ('schema_version', '1')`)
+	tx.Exec(`
+		CREATE TABLE instances (
+			id              TEXT PRIMARY KEY,
+			title           TEXT NOT NULL,
+			project_path    TEXT NOT NULL,
+			group_path      TEXT NOT NULL DEFAULT 'my-sessions',
+			sort_order      INTEGER NOT NULL DEFAULT 0,
+			command         TEXT NOT NULL DEFAULT '',
+			wrapper         TEXT NOT NULL DEFAULT '',
+			tool            TEXT NOT NULL DEFAULT 'shell',
+			status          TEXT NOT NULL DEFAULT 'error',
+			tmux_session    TEXT NOT NULL DEFAULT '',
+			created_at      INTEGER NOT NULL,
+			last_accessed   INTEGER NOT NULL DEFAULT 0,
+			parent_session_id TEXT NOT NULL DEFAULT '',
+			worktree_path     TEXT NOT NULL DEFAULT '',
+			worktree_repo     TEXT NOT NULL DEFAULT '',
+			worktree_branch   TEXT NOT NULL DEFAULT '',
+			tool_data       TEXT NOT NULL DEFAULT '{}',
+			acknowledged    INTEGER NOT NULL DEFAULT 0
+		)
+	`)
+
+	// Insert existing session
+	now := time.Now()
+	tx.Exec(`
+		INSERT INTO instances (id, title, project_path, group_path, sort_order, tool, status, created_at, tool_data)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, "existing-1", "Existing Session", "/tmp/existing", "grp", 5, "claude", "idle", now.Unix(), "{}")
+	tx.Commit()
+	db1.Close()
+
+	// Reopen and migrate to v2
+	db2, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Reopen: %v", err)
+	}
+	defer db2.Close()
+
+	if err := db2.Migrate(); err != nil {
+		t.Fatalf("Migrate to v2: %v", err)
+	}
+
+	// Verify schema version updated
+	version, _ := db2.GetMeta("schema_version")
+	if version != "2" {
+		t.Errorf("Expected schema version 2, got %q", version)
+	}
+
+	// Load existing instance and verify new columns have defaults
+	loaded, err := db2.LoadInstances()
+	if err != nil {
+		t.Fatalf("LoadInstances: %v", err)
+	}
+	if len(loaded) != 1 {
+		t.Fatalf("Expected 1 instance, got %d", len(loaded))
+	}
+
+	l := loaded[0]
+	if l.ID != "existing-1" {
+		t.Errorf("ID: %q", l.ID)
+	}
+	if l.KanbanColumn != nil {
+		t.Errorf("KanbanColumn should be NULL for migrated data, got %v", l.KanbanColumn)
+	}
+	if l.KanbanSortOrder != 0 {
+		t.Errorf("KanbanSortOrder should be 0, got %d", l.KanbanSortOrder)
+	}
+	if l.KanbanLastMoved != nil {
+		t.Errorf("KanbanLastMoved should be NULL, got %v", l.KanbanLastMoved)
+	}
+	if l.Description != "" {
+		t.Errorf("Description should be empty, got %q", l.Description)
+	}
+	if l.AcceptCriteria != "" {
+		t.Errorf("AcceptCriteria should be empty, got %q", l.AcceptCriteria)
+	}
+	if l.AutomationMode != "interactive" {
+		t.Errorf("AutomationMode should be 'interactive', got %q", l.AutomationMode)
+	}
+	if l.YOLOConfigJSON != nil {
+		t.Errorf("YOLOConfigJSON should be NULL, got %v", l.YOLOConfigJSON)
+	}
+}
+
+func TestMigrationV2_Idempotent(t *testing.T) {
+	db := newTestDB(t)
+
+	// Migrate again (should be no-op)
+	if err := db.Migrate(); err != nil {
+		t.Fatalf("Second Migrate: %v", err)
+	}
+
+	// Migrate a third time
+	if err := db.Migrate(); err != nil {
+		t.Fatalf("Third Migrate: %v", err)
+	}
+
+	version, _ := db.GetMeta("schema_version")
+	if version != "2" {
+		t.Errorf("Expected schema version 2, got %q", version)
+	}
+}
+
+func TestGroupKanbanConfigsTable(t *testing.T) {
+	db := newTestDB(t)
+
+	// Verify table structure
+	rows, err := db.DB().Query("PRAGMA table_info(group_kanban_configs)")
+	if err != nil {
+		t.Fatalf("PRAGMA table_info: %v", err)
+	}
+	defer rows.Close()
+
+	columns := make(map[string]bool)
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull, pk int
+		var dflt any
+		rows.Scan(&cid, &name, &typ, &notNull, &dflt, &pk)
+		columns[name] = true
+	}
+
+	required := []string{"group_path", "kanban_enabled", "created_at", "updated_at"}
+	for _, col := range required {
+		if !columns[col] {
+			t.Errorf("Missing column: %s", col)
+		}
+	}
+}
+
+func TestColumnSkillMappingsTable(t *testing.T) {
+	db := newTestDB(t)
+
+	// Verify table structure
+	rows, err := db.DB().Query("PRAGMA table_info(column_skill_mappings)")
+	if err != nil {
+		t.Fatalf("PRAGMA table_info: %v", err)
+	}
+	defer rows.Close()
+
+	columns := make(map[string]bool)
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull, pk int
+		var dflt any
+		rows.Scan(&cid, &name, &typ, &notNull, &dflt, &pk)
+		columns[name] = true
+	}
+
+	required := []string{"id", "group_path", "column_name", "skill_name", "auto_trigger", "trigger_on_enter"}
+	for _, col := range required {
+		if !columns[col] {
+			t.Errorf("Missing column: %s", col)
+		}
+	}
+}
+
+// --- Kanban CRUD Tests ---
+
+func TestSaveLoadGroupKanbanConfig(t *testing.T) {
+	db := newTestDB(t)
+
+	now := time.Now()
+	config := &GroupKanbanConfigRow{
+		GroupPath:     "my-project",
+		KanbanEnabled: true,
+		CreatedAt:     now.Unix(),
+		UpdatedAt:     now.Unix(),
+	}
+
+	if err := db.SaveGroupKanbanConfig(config); err != nil {
+		t.Fatalf("SaveGroupKanbanConfig: %v", err)
+	}
+
+	loaded, err := db.LoadGroupKanbanConfig("my-project")
+	if err != nil {
+		t.Fatalf("LoadGroupKanbanConfig: %v", err)
+	}
+	if loaded == nil {
+		t.Fatal("Expected config, got nil")
+	}
+	if loaded.GroupPath != "my-project" {
+		t.Errorf("GroupPath: %q", loaded.GroupPath)
+	}
+	if !loaded.KanbanEnabled {
+		t.Error("KanbanEnabled should be true")
+	}
+	if loaded.CreatedAt != now.Unix() {
+		t.Errorf("CreatedAt: %d", loaded.CreatedAt)
+	}
+}
+
+func TestLoadGroupKanbanConfig_NotFound(t *testing.T) {
+	db := newTestDB(t)
+
+	loaded, err := db.LoadGroupKanbanConfig("nonexistent")
+	if err != nil {
+		t.Fatalf("LoadGroupKanbanConfig: %v", err)
+	}
+	if loaded != nil {
+		t.Errorf("Expected nil, got %+v", loaded)
+	}
+}
+
+func TestSaveColumnSkillMapping(t *testing.T) {
+	db := newTestDB(t)
+
+	mapping := &ColumnSkillMappingRow{
+		GroupPath:      "my-project",
+		ColumnName:     "todo",
+		SkillName:      "planner",
+		AutoTrigger:    false,
+		TriggerOnEnter: true,
+	}
+
+	if err := db.SaveColumnSkillMapping(mapping); err != nil {
+		t.Fatalf("SaveColumnSkillMapping: %v", err)
+	}
+
+	loaded, err := db.LoadColumnSkillMappings("my-project")
+	if err != nil {
+		t.Fatalf("LoadColumnSkillMappings: %v", err)
+	}
+	if len(loaded) != 1 {
+		t.Fatalf("Expected 1 mapping, got %d", len(loaded))
+	}
+
+	m := loaded[0]
+	if m.GroupPath != "my-project" {
+		t.Errorf("GroupPath: %q", m.GroupPath)
+	}
+	if m.ColumnName != "todo" {
+		t.Errorf("ColumnName: %q", m.ColumnName)
+	}
+	if m.SkillName != "planner" {
+		t.Errorf("SkillName: %q", m.SkillName)
+	}
+	if m.AutoTrigger {
+		t.Error("AutoTrigger should be false")
+	}
+	if !m.TriggerOnEnter {
+		t.Error("TriggerOnEnter should be true")
+	}
+}
+
+func TestSaveColumnSkillMapping_Upsert(t *testing.T) {
+	db := newTestDB(t)
+
+	// Insert first mapping
+	mapping1 := &ColumnSkillMappingRow{
+		GroupPath:      "my-project",
+		ColumnName:     "todo",
+		SkillName:      "planner",
+		AutoTrigger:    false,
+		TriggerOnEnter: true,
+	}
+	if err := db.SaveColumnSkillMapping(mapping1); err != nil {
+		t.Fatalf("SaveColumnSkillMapping (1): %v", err)
+	}
+
+	// Update with different skill
+	mapping2 := &ColumnSkillMappingRow{
+		GroupPath:      "my-project",
+		ColumnName:     "todo",
+		SkillName:      "architect",
+		AutoTrigger:    true,
+		TriggerOnEnter: false,
+	}
+	if err := db.SaveColumnSkillMapping(mapping2); err != nil {
+		t.Fatalf("SaveColumnSkillMapping (2): %v", err)
+	}
+
+	// Should only have one mapping (upsert replaced the first)
+	loaded, err := db.LoadColumnSkillMappings("my-project")
+	if err != nil {
+		t.Fatalf("LoadColumnSkillMappings: %v", err)
+	}
+	if len(loaded) != 1 {
+		t.Fatalf("Expected 1 mapping after upsert, got %d", len(loaded))
+	}
+
+	m := loaded[0]
+	if m.SkillName != "architect" {
+		t.Errorf("SkillName should be 'architect', got %q", m.SkillName)
+	}
+	if !m.AutoTrigger {
+		t.Error("AutoTrigger should be true after upsert")
+	}
+	if m.TriggerOnEnter {
+		t.Error("TriggerOnEnter should be false after upsert")
+	}
+}
+
+func TestLoadColumnSkillMappings_Empty(t *testing.T) {
+	db := newTestDB(t)
+
+	loaded, err := db.LoadColumnSkillMappings("nonexistent")
+	if err != nil {
+		t.Fatalf("LoadColumnSkillMappings: %v", err)
+	}
+	if len(loaded) != 0 {
+		t.Errorf("Expected empty slice, got %d mappings", len(loaded))
+	}
+}
+
+func TestMigrationV2_CompleteWorkflow(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "state.db")
+
+	// Step 1: Create v1 database with multiple sessions
+	db1, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	tx, _ := db1.DB().Begin()
+	tx.Exec(`CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)`)
+	tx.Exec(`INSERT INTO metadata (key, value) VALUES ('schema_version', '1')`)
+	tx.Exec(`
+		CREATE TABLE instances (
+			id              TEXT PRIMARY KEY,
+			title           TEXT NOT NULL,
+			project_path    TEXT NOT NULL,
+			group_path      TEXT NOT NULL DEFAULT 'my-sessions',
+			sort_order      INTEGER NOT NULL DEFAULT 0,
+			command         TEXT NOT NULL DEFAULT '',
+			wrapper         TEXT NOT NULL DEFAULT '',
+			tool            TEXT NOT NULL DEFAULT 'shell',
+			status          TEXT NOT NULL DEFAULT 'error',
+			tmux_session    TEXT NOT NULL DEFAULT '',
+			created_at      INTEGER NOT NULL,
+			last_accessed   INTEGER NOT NULL DEFAULT 0,
+			parent_session_id TEXT NOT NULL DEFAULT '',
+			worktree_path     TEXT NOT NULL DEFAULT '',
+			worktree_repo     TEXT NOT NULL DEFAULT '',
+			worktree_branch   TEXT NOT NULL DEFAULT '',
+			tool_data       TEXT NOT NULL DEFAULT '{}',
+			acknowledged    INTEGER NOT NULL DEFAULT 0
+		)
+	`)
+	tx.Exec(`CREATE TABLE groups (path TEXT PRIMARY KEY, name TEXT NOT NULL, expanded INTEGER NOT NULL DEFAULT 1, sort_order INTEGER NOT NULL DEFAULT 0, default_path TEXT NOT NULL DEFAULT '')`)
+	tx.Exec(`CREATE TABLE instance_heartbeats (pid INTEGER PRIMARY KEY, started INTEGER NOT NULL, heartbeat INTEGER NOT NULL, is_primary INTEGER NOT NULL DEFAULT 0)`)
+
+	now := time.Now()
+	tx.Exec(`INSERT INTO instances (id, title, project_path, group_path, sort_order, tool, status, created_at, tool_data)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, "sess-1", "Session 1", "/proj1", "grp1", 0, "claude", "idle", now.Unix(), `{"claude_session_id":"cls-1"}`)
+	tx.Exec(`INSERT INTO instances (id, title, project_path, group_path, sort_order, tool, status, created_at, tool_data)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, "sess-2", "Session 2", "/proj2", "grp1", 1, "gemini", "running", now.Unix(), "{}")
+	tx.Exec(`INSERT INTO instances (id, title, project_path, group_path, sort_order, tool, status, created_at, tool_data)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, "sess-3", "Session 3", "/proj3", "grp2", 0, "shell", "idle", now.Unix(), "{}")
+
+	tx.Commit()
+	db1.Close()
+
+	// Step 2: Reopen and migrate
+	db2, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Reopen: %v", err)
+	}
+	defer db2.Close()
+
+	if err := db2.Migrate(); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+
+	// Step 3: Verify all sessions loaded with defaults
+	sessions, err := db2.LoadInstances()
+	if err != nil {
+		t.Fatalf("LoadInstances: %v", err)
+	}
+	if len(sessions) != 3 {
+		t.Fatalf("Expected 3 sessions, got %d", len(sessions))
+	}
+
+	for _, s := range sessions {
+		if s.KanbanColumn != nil {
+			t.Errorf("Session %s: KanbanColumn should be nil, got %v", s.ID, *s.KanbanColumn)
+		}
+		if s.AutomationMode != "interactive" {
+			t.Errorf("Session %s: AutomationMode should be 'interactive', got %q", s.ID, s.AutomationMode)
+		}
+	}
+
+	// Step 4: Update one session with kanban data
+	col := "in-progress"
+	movedAt := time.Now().Unix()
+	sessions[0].KanbanColumn = &col
+	sessions[0].KanbanSortOrder = 5
+	sessions[0].KanbanLastMoved = &movedAt
+	sessions[0].Description = "Implement kanban mode"
+	sessions[0].AcceptCriteria = "Board displays correctly"
+	sessions[0].AutomationMode = "yolo"
+	yoloConfig := `{"auto_approve":true,"risk_level":"high"}`
+	sessions[0].YOLOConfigJSON = &yoloConfig
+
+	if err := db2.SaveInstance(sessions[0]); err != nil {
+		t.Fatalf("SaveInstance: %v", err)
+	}
+
+	// Step 5: Reload and verify
+	reloaded, err := db2.LoadInstances()
+	if err != nil {
+		t.Fatalf("LoadInstances (2): %v", err)
+	}
+
+	var updated *InstanceRow
+	for _, s := range reloaded {
+		if s.ID == "sess-1" {
+			updated = s
+			break
+		}
+	}
+	if updated == nil {
+		t.Fatal("Could not find sess-1")
+	}
+
+	if updated.KanbanColumn == nil || *updated.KanbanColumn != "in-progress" {
+		t.Errorf("KanbanColumn: %v", updated.KanbanColumn)
+	}
+	if updated.KanbanSortOrder != 5 {
+		t.Errorf("KanbanSortOrder: %d", updated.KanbanSortOrder)
+	}
+	if updated.Description != "Implement kanban mode" {
+		t.Errorf("Description: %q", updated.Description)
+	}
+	if updated.AutomationMode != "yolo" {
+		t.Errorf("AutomationMode: %q", updated.AutomationMode)
+	}
+	if updated.YOLOConfigJSON == nil || *updated.YOLOConfigJSON != yoloConfig {
+		t.Errorf("YOLOConfigJSON: %v", updated.YOLOConfigJSON)
+	}
+
+	// Step 6: Add kanban config for a group
+	config := &GroupKanbanConfigRow{
+		GroupPath:     "grp1",
+		KanbanEnabled: true,
+		CreatedAt:     now.Unix(),
+		UpdatedAt:     now.Unix(),
+	}
+	if err := db2.SaveGroupKanbanConfig(config); err != nil {
+		t.Fatalf("SaveGroupKanbanConfig: %v", err)
+	}
+
+	loadedConfig, err := db2.LoadGroupKanbanConfig("grp1")
+	if err != nil {
+		t.Fatalf("LoadGroupKanbanConfig: %v", err)
+	}
+	if !loadedConfig.KanbanEnabled {
+		t.Error("KanbanEnabled should be true")
+	}
+
+	// Step 7: Add column skill mappings
+	mapping1 := &ColumnSkillMappingRow{
+		GroupPath:      "grp1",
+		ColumnName:     "todo",
+		SkillName:      "planner",
+		AutoTrigger:    false,
+		TriggerOnEnter: true,
+	}
+	mapping2 := &ColumnSkillMappingRow{
+		GroupPath:      "grp1",
+		ColumnName:     "in-progress",
+		SkillName:      "tdd-guide",
+		AutoTrigger:    true,
+		TriggerOnEnter: true,
+	}
+
+	if err := db2.SaveColumnSkillMapping(mapping1); err != nil {
+		t.Fatalf("SaveColumnSkillMapping (1): %v", err)
+	}
+	if err := db2.SaveColumnSkillMapping(mapping2); err != nil {
+		t.Fatalf("SaveColumnSkillMapping (2): %v", err)
+	}
+
+	mappings, err := db2.LoadColumnSkillMappings("grp1")
+	if err != nil {
+		t.Fatalf("LoadColumnSkillMappings: %v", err)
+	}
+	if len(mappings) != 2 {
+		t.Fatalf("Expected 2 mappings, got %d", len(mappings))
+	}
+
+	// Step 8: Delete a mapping
+	if err := db2.DeleteColumnSkillMapping("grp1", "todo"); err != nil {
+		t.Fatalf("DeleteColumnSkillMapping: %v", err)
+	}
+
+	mappings, _ = db2.LoadColumnSkillMappings("grp1")
+	if len(mappings) != 1 {
+		t.Fatalf("Expected 1 mapping after delete, got %d", len(mappings))
+	}
+	if mappings[0].ColumnName != "in-progress" {
+		t.Errorf("Expected 'in-progress', got %q", mappings[0].ColumnName)
+	}
+}
