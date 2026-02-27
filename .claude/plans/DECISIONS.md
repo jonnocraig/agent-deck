@@ -1,5 +1,11 @@
 # Architecture Decisions
 
+## 2026-02-27 - Phase 0: Separate home.go Refactoring PR
+
+**Context**: Multi-model design review (Gemini 3.1 Pro advocate, Gemini 2.5 Pro challenger) identified risk in decomposing 9031-line home.go while simultaneously adding kanban features. Mixing refactoring with new logic makes it hard to isolate bugs.
+**Decision**: Add Phase 0 before all kanban phases. Phase 0 decomposes home.go into 7 kanban_*.go files, extracting existing logic only. Zero new features. App must be functionally identical. Merged as a separate PR before Phase 1 begins.
+**Consequences**: Isolates refactoring risk from feature risk. All subsequent phases modify the new files instead of creating them. Adds one extra PR but significantly reduces debugging complexity.
+
 ## 2026-02-27 - Kanban Mode: Full Kanban Board (Approach 1)
 
 **Context**: User wants kanban board for agent-deck to manage AI coding agent sessions through a workflow: Backlog → Design → Plan → Implement → Review → Done. Three approaches evaluated: Full Kanban, Status Field Only, Hybrid. Five perspectives explored: Architect, Implementer, Devil's Advocate, User Advocate, Skill Designer. Three reference repos analyzed: agtx (Rust kanban), vibe-kanban (Rust+React), claude-vibekanban (Claude commands).

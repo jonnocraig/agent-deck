@@ -718,12 +718,13 @@ Each skill reads the previous column's output artifacts. The Conductor (YOLO mod
 
 | Phase | Scope | Dependencies | New Files | Modified Files |
 |-------|-------|-------------|-----------|----------------|
-| **1: Data Layer** | SQLite migration, Instance fields, persistence, GroupKanbanConfig | None | 0 | 3 (statedb.go, instance.go, groups.go) |
-| **2: Board UI** | KanbanBoard, KanbanCard, KanbanSidebar rendering | Phase 1 | 3 (kanban_board.go, kanban_card.go, kanban_sidebar.go) | 1 (home.go) |
-| **3: Navigation** | KanbanNav 2D cursor, Tab focus, column jump, scroll | Phase 2 | 1 (kanban_nav.go) | 1 (home.go) |
-| **4: Detail Panel** | KanbanDetail editable fields, Space toggle, edit mode | Phase 3 | 1 (kanban_detail.go) | 1 (home.go) |
-| **5: Transitions** | TransitionEngine, skill triggers, 3-tier config, rollback | Phase 4 | 1 (kanban_transition.go) | 1 (home.go) |
-| **6: Conductor** | YOLO mode, zen consensus gates, conductor lifecycle | Phase 5 | 1 (kanban_conductor.go) | 1 (home.go) |
+| **0: Refactor** | Decompose home.go into kanban component files. Extract existing logic only — zero new features. App must be functionally identical after this phase. Separate PR, merged and stabilized before Phase 1. | None | 7 (kanban_board.go, kanban_card.go, kanban_sidebar.go, kanban_detail.go, kanban_nav.go, kanban_transition.go, kanban_conductor.go) | 1 (home.go) |
+| **1: Data Layer** | SQLite migration, Instance fields, persistence, GroupKanbanConfig | Phase 0 | 0 | 3 (statedb.go, instance.go, groups.go) |
+| **2: Board UI** | KanbanBoard, KanbanCard, KanbanSidebar rendering | Phase 1 | 0 (files created in Phase 0) | 3 (kanban_board.go, kanban_card.go, kanban_sidebar.go) |
+| **3: Navigation** | KanbanNav 2D cursor, Tab focus, column jump, scroll | Phase 2 | 0 (file created in Phase 0) | 1 (kanban_nav.go) |
+| **4: Detail Panel** | KanbanDetail editable fields, Space toggle, edit mode | Phase 3 | 0 (file created in Phase 0) | 1 (kanban_detail.go) |
+| **5: Transitions** | TransitionEngine, skill triggers, 3-tier config, rollback | Phase 4 | 0 (file created in Phase 0) | 1 (kanban_transition.go) |
+| **6: Conductor** | YOLO mode, zen consensus gates, conductor lifecycle | Phase 5 | 0 (file created in Phase 0) | 1 (kanban_conductor.go) |
 | **7: Skills** | 4 new skills (backlog, review, done, self-evolve) | Phase 5 | 4 skill directories | 0 |
 
 ## Next Steps
@@ -731,6 +732,7 @@ Each skill reads the previous column's output artifacts. The Conductor (YOLO mod
 - [ ] Create implementation plan (use `agentic-ai-plan`)
 - [ ] Set up worktree for implementation (already on feature/KanbanMode)
 - [ ] Execute plan with agent team (use `agentic-ai-implement`)
+- [ ] Phase 0: Decompose home.go (separate PR, no new features)
 - [ ] Phase 1: Data layer implementation
 - [ ] Phase 2-4: UI components
 - [ ] Phase 5-6: Transition engine + conductor

@@ -9,7 +9,10 @@
   - [x] Read zen/PAL MCP consensus best practices
   - [x] Write full design document (737 lines)
   - [x] Commit design document
-  - [ ] Create implementation plan (`agentic-ai-plan`)
+  - [x] Multi-model design review (Gemini 3.1 Pro advocate, Gemini 2.5 Pro challenger)
+  - [x] Adopt Phase 0 refactoring from review feedback
+  - [x] Create implementation plan (`agentic-ai-plan`) — 24 tasks, 6 waves
+  - [ ] **Phase 0: Refactor** — Decompose home.go (separate PR, zero features, functionally identical)
   - [ ] **Phase 1: Data Layer** — SQLite migration, Instance fields, GroupKanbanConfig
   - [ ] **Phase 2: Board UI** — KanbanBoard, KanbanCard, KanbanSidebar rendering
   - [ ] **Phase 3: Navigation** — KanbanNav 2D cursor, Tab focus, column jump, scroll
@@ -18,26 +21,25 @@
   - [ ] **Phase 6: Conductor** — YOLO mode, zen consensus gates, conductor lifecycle
   - [ ] **Phase 7: Skills** — 4 new skills (backlog, review, done, self-evolve)
 
-## Completed This Session (2026-02-27 — Kanban Mode Design Brainstorm)
+## Completed This Session (2026-02-27 — Design Review + Plan Enrichment)
 
-- [x] Cloned and analyzed agtx (Rust kanban for coding agents) — board layout, task model, plugin system
-- [x] Cloned and analyzed vibe-kanban (Rust+React rich kanban) — sub-issues, priorities, tags, workspaces
-- [x] Cloned and analyzed claude-vibekanban (Claude commands) — epic workflow, 17 commands, parallel execution
-- [x] Read Anthropic skill best practices (platform.claude.com)
-- [x] Read zen/PAL MCP consensus best practices (blinded consensus, file paths, continuation IDs)
-- [x] Explored agent-deck codebase (245 Go files, 9031-line home.go, session model, group system)
-- [x] Explored existing agentic-ai skills (brainstorm, plan, implement — patterns, conventions)
-- [x] Asked 4 rounds of clarifying questions (view mode, auto-trigger, learning store, merge strategy)
-- [x] Ran 5 parallel exploration agents (Architect, Implementer, Devil's Advocate, User Advocate, Skill Designer)
-- [x] Synthesized findings into 3 approaches, recommended Approach 1 (Full Kanban)
-- [x] Validated 7 design sections with user (architecture, components, API, errors, testing, skills, automation)
-- [x] Revised: Enter=attach, Space=detail panel, Claude Chrome in review, agent team for screenshots
-- [x] Added YOLO mode with Conductor agent and zen consensus gates
-- [x] Added zen MCP best practices (blinded consensus, file paths, continuation IDs, escalation)
-- [x] Wrote and committed design document (97a87a4)
+- [x] Ran multi-model design review via zen consensus (Gemini 3.1 Pro + Gemini 2.5 Pro)
+- [x] GPT-5.2 quota exhausted — used Gemini 2.5 Pro as challenger instead
+- [x] Gemini 3.1 Pro: 8/10 confidence, validated KanbanColumn/Status separation, Elm alignment, component decomposition
+- [x] Gemini 2.5 Pro: challenged scope, terminal width, 3-tier config, YOLO reliability, self-evolve value
+- [x] User adopted only Phase 0 (home.go refactoring as separate PR), kept all other design elements
+- [x] Updated design doc with Phase 0 in implementation phases table
+- [x] Updated session handoff and todos with Phase 0
+- [x] Ran agentic-ai-plan skill to enrich plan
+- [x] Confirmed correct file paths: storage.go (not statedb.go), migration.go, conductor.go already exists
+- [x] Generated 24 tasks across 8 phases with agent orchestration metadata
+- [x] Assigned 6 execution waves with user checkpoints and quality gates
+- [x] Wrote 3 output files (JSON, XML, MD) to .claude/plans/agent-teams/
 
 ## Completed Previous Sessions
 
+- [x] Full kanban mode design brainstorm (session 7)
+- [x] Design document written and committed (97a87a4)
 - [x] User profile sync design (brainstorm + design doc)
 - [x] OAuth credential forwarding (oauth.go, sync step 5, CLAUDE_CODE_OAUTH_TOKEN)
 - [x] Config stripping (stripHostOnlyFields, stripSettingsForVM, stripJSONKeys)
