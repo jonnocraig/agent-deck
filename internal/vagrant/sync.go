@@ -108,9 +108,27 @@ func (m *Manager) SyncClaudeConfig() error {
 		// Non-fatal
 	}
 
-	// 7. Batch sync profile directories (skills, commands, agents, rules)
+	// 7. Batch sync profile directories (skills, commands, agents, rules, plugins)
 	if err := m.syncProfileToVM(); err != nil {
 		// Non-fatal: continue even if profile sync fails
+	}
+
+	// 8. Sync shell RC files so aliases, exports, and functions are available in VM
+	for _, rcFile := range []string{".zshrc", ".bashrc"} {
+		absPath := filepath.Join(homeDir, rcFile)
+		if data, err := os.ReadFile(absPath); err == nil {
+			if err := writeFunc("~/"+rcFile, data); err != nil {
+				// Non-fatal
+			}
+		}
+	}
+
+	// 9. Sync git config so git operations in VM have correct author info
+	gitConfig := filepath.Join(homeDir, ".gitconfig")
+	if data, err := os.ReadFile(gitConfig); err == nil {
+		if err := writeFunc("~/.gitconfig", data); err != nil {
+			// Non-fatal
+		}
 	}
 
 	return nil

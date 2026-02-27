@@ -1168,6 +1168,101 @@ func TestSyncClaudeConfig_CallsProfileSync(t *testing.T) {
 	}
 }
 
+func TestSyncClaudeConfig_ShellRCFiles(t *testing.T) {
+	tempHome := t.TempDir()
+
+	origOAuth := extractOAuthCredentialsFunc
+	extractOAuthCredentialsFunc = func() ([]byte, error) { return nil, ErrNoOAuthCredentials }
+	defer func() { extractOAuthCredentialsFunc = origOAuth }()
+
+	// Create shell RC files
+	os.WriteFile(filepath.Join(tempHome, ".zshrc"), []byte("alias ll='ls -la'\nexport EDITOR=vim"), 0644)
+	os.WriteFile(filepath.Join(tempHome, ".bashrc"), []byte("alias gs='git status'"), 0644)
+
+	os.MkdirAll(filepath.Join(tempHome, ".claude"), 0755)
+
+	t.Setenv("HOME", tempHome)
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+
+	manager := NewManager("/test/project", session.VagrantSettings{})
+
+	var writeCalls []writeFileCall
+	manager.writeFileToVMFunc = func(remotePath string, content []byte) error {
+		writeCalls = append(writeCalls, writeFileCall{remotePath: remotePath, content: content})
+		return nil
+	}
+
+	if err := manager.SyncClaudeConfig(); err != nil {
+		t.Fatalf("SyncClaudeConfig returned error: %v", err)
+	}
+
+	foundZshrc := false
+	foundBashrc := false
+	for _, call := range writeCalls {
+		if call.remotePath == "~/.zshrc" {
+			foundZshrc = true
+			if !strings.Contains(string(call.content), "alias ll") {
+				t.Errorf("~/.zshrc content mismatch: %s", string(call.content))
+			}
+		}
+		if call.remotePath == "~/.bashrc" {
+			foundBashrc = true
+			if !strings.Contains(string(call.content), "alias gs") {
+				t.Errorf("~/.bashrc content mismatch: %s", string(call.content))
+			}
+		}
+	}
+
+	if !foundZshrc {
+		t.Error("expected ~/.zshrc to be synced")
+	}
+	if !foundBashrc {
+		t.Error("expected ~/.bashrc to be synced")
+	}
+}
+
+func TestSyncClaudeConfig_GitConfig(t *testing.T) {
+	tempHome := t.TempDir()
+
+	origOAuth := extractOAuthCredentialsFunc
+	extractOAuthCredentialsFunc = func() ([]byte, error) { return nil, ErrNoOAuthCredentials }
+	defer func() { extractOAuthCredentialsFunc = origOAuth }()
+
+	gitConfig := "[user]\n\tname = Test User\n\temail = test@example.com\n"
+	os.WriteFile(filepath.Join(tempHome, ".gitconfig"), []byte(gitConfig), 0644)
+
+	os.MkdirAll(filepath.Join(tempHome, ".claude"), 0755)
+
+	t.Setenv("HOME", tempHome)
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+
+	manager := NewManager("/test/project", session.VagrantSettings{})
+
+	var writeCalls []writeFileCall
+	manager.writeFileToVMFunc = func(remotePath string, content []byte) error {
+		writeCalls = append(writeCalls, writeFileCall{remotePath: remotePath, content: content})
+		return nil
+	}
+
+	if err := manager.SyncClaudeConfig(); err != nil {
+		t.Fatalf("SyncClaudeConfig returned error: %v", err)
+	}
+
+	found := false
+	for _, call := range writeCalls {
+		if call.remotePath == "~/.gitconfig" {
+			found = true
+			if !strings.Contains(string(call.content), "Test User") {
+				t.Errorf("~/.gitconfig content mismatch: %s", string(call.content))
+			}
+		}
+	}
+
+	if !found {
+		t.Error("expected ~/.gitconfig to be synced")
+	}
+}
+
 // Helper types for testing
 type writeFileCall struct {
 	remotePath string
