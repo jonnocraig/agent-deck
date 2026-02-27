@@ -9,25 +9,28 @@
   - [x] Multi-model design review + Phase 0 adoption
   - [x] Create implementation plan — 28 tasks, 6 waves
   - [x] Cross-model plan review + TDD enhancement
-  - [x] **Phase 0: Refactor** — home.go decomposed into 7 kanban_*.go files (DONE, needs commit+PR)
-  - [ ] **Commit + PR for Phase 0** — commit the decomposition, create PR, merge before Wave 2
-  - [ ] **Phase 1: Data Layer** — SQLite migration, Instance fields, GroupKanbanConfig
-  - [ ] **Phase 2: Board UI** — KanbanBoard, KanbanCard, KanbanSidebar rendering
+  - [x] **Phase 0: Refactor** — home.go decomposed into 7 kanban_*.go files (b80441d)
+  - [x] **Phase 1: Data Layer** — types, schema v2, CRUD, messages, sort order (9b7ea91)
+  - [ ] **Phase 2: Board UI** — KanbanBoard, KanbanCard, KanbanSidebar rendering (**NEXT**)
   - [ ] **Phase 3: Navigation** — KanbanNav 2D cursor, Tab focus, column jump, scroll
   - [ ] **Phase 4: Detail Panel** — KanbanDetail editable fields, Space toggle, edit mode
   - [ ] **Phase 5: Transitions** — TransitionEngine, skill triggers, 3-tier config, rollback
   - [ ] **Phase 6: Conductor** — YOLO mode, zen consensus gates, conductor lifecycle
   - [ ] **Phase 7: Skills** — 4 new skills (backlog, review, done, self-evolve)
 
-## Completed This Session (2026-02-27 — Wave 1 Implementation)
+## Completed This Session (2026-02-27 — Wave 2 Implementation)
 
-- [x] Task 0.1: Analyzed home.go extraction boundaries (opus/architect)
-- [x] Task 0.2: Executed home.go decomposition — 7 new files created, home.go 9031→6038 lines
-- [x] Task 0.3: Verified functional equivalence — build, test, vet all pass
-- [x] Wave 1 quality gates: build-check pass, vet-check pass, test-suite pass (16/16 packages)
+- [x] Task 1.1: Define KanbanColumn type + Instance fields (7 tests pass)
+- [x] Task 1.2: Create SQLite migrations — schema v2, 7 ALTER TABLEs, 2 new tables (8 tests pass)
+- [x] Task 1.3: Add CRUD methods + GroupKanbanConfig persistence (17 tests pass)
+- [x] Task 1.4: Define Bubble Tea message types — 22 messages, FocusPanel enum, ErrorAction (4 tests pass)
+- [x] Task 1.5: Implement sort order calculation + rebalancing (8 tests pass)
+- [x] Wave 2 quality gates: build-check pass, vet-check pass, test-suite pass (16/16 packages)
+- [x] Wave 2 committed: 9b7ea91
 
 ## Completed Previous Sessions
 
+- [x] Wave 1 implementation (session 10) — home.go decomposition, committed b80441d
 - [x] Plan review + TDD enhancement (session 9)
 - [x] Design review + plan enrichment (session 8)
 - [x] Full kanban mode design brainstorm (session 7)
