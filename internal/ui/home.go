@@ -4244,7 +4244,7 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if h.cursor < len(h.flatItems) {
 			item := h.flatItems[h.cursor]
 			if item.Type == session.ItemTypeSession && item.Session != nil {
-				h.confirmDialog.ShowDeleteSession(item.Session.ID, item.Session.Title, item.Session.IsSandboxed())
+				h.confirmDialog.ShowDeleteSession(item.Session.ID, item.Session.Title, item.Session.IsSandboxed(), item.Session.IsVagrantMode())
 			} else if item.Type == session.ItemTypeGroup && item.Path != session.DefaultGroupPath {
 				h.confirmDialog.ShowDeleteGroup(item.Path, item.Group.Name)
 			}

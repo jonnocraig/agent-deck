@@ -30,6 +30,7 @@ type ConfirmDialog struct {
 	height      int
 	mcpCount    int  // Number of running MCPs (for quit confirmation)
 	sandboxed   bool // Whether the session uses a Docker sandbox.
+	vagrantMode bool // Whether the session uses a Vagrant VM.
 
 	// Pending session creation data (for ConfirmCreateDirectory)
 	pendingSessionName      string
@@ -45,12 +46,13 @@ func NewConfirmDialog() *ConfirmDialog {
 }
 
 // ShowDeleteSession shows confirmation for session deletion.
-func (c *ConfirmDialog) ShowDeleteSession(sessionID string, sessionName string, sandboxed bool) {
+func (c *ConfirmDialog) ShowDeleteSession(sessionID string, sessionName string, sandboxed bool, vagrantMode bool) {
 	c.visible = true
 	c.confirmType = ConfirmDeleteSession
 	c.targetID = sessionID
 	c.targetName = sessionName
 	c.sandboxed = sandboxed
+	c.vagrantMode = vagrantMode
 }
 
 // ShowDeleteGroup shows confirmation for group deletion
@@ -108,6 +110,7 @@ func (c *ConfirmDialog) Hide() {
 	c.targetID = ""
 	c.targetName = ""
 	c.sandboxed = false
+	c.vagrantMode = false
 }
 
 // IsVisible returns whether the dialog is visible
@@ -160,6 +163,9 @@ func (c *ConfirmDialog) View() string {
 		details = "• The tmux session will be terminated\n• Any running processes will be killed\n• Terminal history will be lost"
 		if c.sandboxed {
 			details += "\n• The Docker container will be removed"
+		}
+		if c.vagrantMode {
+			details += "\n• The Vagrant VM will be suspended (or destroyed if last session)"
 		}
 		details += "\n• Press Ctrl+Z after deletion to undo"
 		borderColor = ColorRed
