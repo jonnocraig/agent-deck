@@ -3236,6 +3236,29 @@ func (i *Instance) Kill() error {
 		}
 	}
 
+	// Clean up Vagrant VM when this is the last session.
+	// Initialize provider if needed (Kill can be called on restored sessions
+	// without prior Start, so vagrantProvider may be nil).
+	if i.IsVagrantMode() {
+		if i.vagrantProvider == nil {
+			factory := GetVagrantProviderFactory()
+			if factory != nil {
+				i.vagrantProvider = factory(i.ProjectPath, GetVagrantSettings())
+			}
+		}
+		if i.vagrantProvider != nil {
+			_ = i.vagrantProvider.UnregisterSession(i.ID)
+			if i.vagrantProvider.SessionCount() == 0 {
+				settings := GetVagrantSettings()
+				if settings.AutoDestroy {
+					_ = i.vagrantProvider.Destroy()
+				} else if settings.AutoSuspend == nil || *settings.AutoSuspend {
+					_ = i.vagrantProvider.Suspend()
+				}
+			}
+		}
+	}
+
 	i.Status = StatusError
 
 	if tmuxErr != nil {
