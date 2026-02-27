@@ -658,10 +658,10 @@ func TestStripHostOnlyFields(t *testing.T) {
 		wantPresent  []string // keys that should be preserved
 	}{
 		{
-			name:        "strips installMethod and oauthAccount",
+			name:        "strips installMethod and mcpServers but keeps oauthAccount",
 			input:       `{"installMethod":"native","oauthAccount":{"id":"abc"},"mcpServers":{"x":{}},"numStartups":5}`,
-			wantAbsent:  []string{"installMethod", "oauthAccount", "mcpServers"},
-			wantPresent: []string{"numStartups"},
+			wantAbsent:  []string{"installMethod", "mcpServers"},
+			wantPresent: []string{"numStartups", "oauthAccount"},
 		},
 		{
 			name:        "only installMethod present",
@@ -839,11 +839,11 @@ func TestSyncClaudeConfig_HostOnlyFieldsStripped(t *testing.T) {
 			if strings.Contains(content, "installMethod") {
 				t.Errorf("installMethod should be stripped from user config, got: %s", content)
 			}
-			if strings.Contains(content, "oauthAccount") {
-				t.Errorf("oauthAccount should be stripped from user config, got: %s", content)
-			}
 			if strings.Contains(content, "mcpServers") {
 				t.Errorf("mcpServers should be stripped from user config, got: %s", content)
+			}
+			if !strings.Contains(content, "oauthAccount") {
+				t.Errorf("oauthAccount should be preserved in user config for OAuth refresh, got: %s", content)
 			}
 			if !strings.Contains(content, "projects") {
 				t.Errorf("projects should be preserved in user config, got: %s", content)
@@ -1067,9 +1067,9 @@ func TestSyncClaudeConfig_OnboardingInjected(t *testing.T) {
 	}
 }
 
-// TestGetVMClaudeMD verifies the CLAUDE.md content strips frontmatter and keeps the body
-func TestGetVMClaudeMD(t *testing.T) {
-	md := getVMClaudeMD()
+// TestGetMergedVMClaudeMD verifies the CLAUDE.md content strips frontmatter and keeps the body
+func TestGetMergedVMClaudeMD(t *testing.T) {
+	md := getMergedVMClaudeMD()
 
 	// Should NOT contain YAML frontmatter
 	if strings.Contains(md, "---") && strings.HasPrefix(md, "---") {
@@ -1133,6 +1133,111 @@ func TestSyncClaudeConfigWritesClaudeMD(t *testing.T) {
 	}
 	if !strings.Contains(content, "Operating in a Vagrant VM") {
 		t.Error("CLAUDE.md should contain VM context instructions")
+	}
+}
+
+// TestGetMergedVMClaudeMD_WithHostFile verifies that getMergedVMClaudeMD merges
+// the VM context with the user's host ~/.claude/CLAUDE.md when it exists.
+func TestGetMergedVMClaudeMD_WithHostFile(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	// Create ~/.claude/CLAUDE.md on the "host"
+	claudeDir := filepath.Join(tempHome, ".claude")
+	if err := os.MkdirAll(claudeDir, 0755); err != nil {
+		t.Fatalf("failed to create .claude dir: %v", err)
+	}
+	hostContent := "# My Custom Rules\n\nAlways use tabs."
+	if err := os.WriteFile(filepath.Join(claudeDir, "CLAUDE.md"), []byte(hostContent), 0644); err != nil {
+		t.Fatalf("failed to write host CLAUDE.md: %v", err)
+	}
+
+	result := getMergedVMClaudeMD()
+
+	// VM context must be present
+	if !strings.Contains(result, "Operating in a Vagrant VM") {
+		t.Error("merged CLAUDE.md should contain VM context ('Operating in a Vagrant VM')")
+	}
+
+	// User content must be present
+	if !strings.Contains(result, "My Custom Rules") {
+		t.Error("merged CLAUDE.md should contain user content ('My Custom Rules')")
+	}
+	if !strings.Contains(result, "Always use tabs") {
+		t.Error("merged CLAUDE.md should contain user content ('Always use tabs')")
+	}
+
+	// Separator must be present between VM and user content
+	if !strings.Contains(result, "\n\n---\n\n") {
+		t.Error("merged CLAUDE.md should contain a '---' separator between VM and user content")
+	}
+
+	// VM content must appear BEFORE user content
+	vmIdx := strings.Index(result, "Operating in a Vagrant VM")
+	userIdx := strings.Index(result, "My Custom Rules")
+	if vmIdx >= userIdx {
+		t.Errorf("VM content (at %d) should appear before user content (at %d)", vmIdx, userIdx)
+	}
+}
+
+// TestGetMergedVMClaudeMD_NoHostFile verifies that getMergedVMClaudeMD returns
+// only VM context when the user has no ~/.claude/CLAUDE.md on the host.
+func TestGetMergedVMClaudeMD_NoHostFile(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	// No ~/.claude/CLAUDE.md exists in tempHome
+
+	result := getMergedVMClaudeMD()
+
+	// VM context must be present
+	if !strings.Contains(result, "Operating in a Vagrant VM") {
+		t.Error("CLAUDE.md should contain VM context ('Operating in a Vagrant VM')")
+	}
+
+	// Must NOT contain the merge separator pattern
+	if strings.Contains(result, "\n\n---\n\n") {
+		t.Error("CLAUDE.md without host file should not contain the merge separator ('\\n\\n---\\n\\n')")
+	}
+
+	// Must NOT contain any user-specific content (sanity check)
+	if strings.Contains(result, "My Custom Rules") {
+		t.Error("CLAUDE.md should not contain user content when host file is absent")
+	}
+}
+
+// TestSyncClaudeConfig_CallsProfileSync verifies that SyncClaudeConfig executes
+// step 7 (syncProfileToVM) by checking that createProfileTarFunc is invoked.
+func TestSyncClaudeConfig_CallsProfileSync(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+
+	// Disable OAuth to avoid hitting real Keychain
+	origOAuth := extractOAuthCredentialsFunc
+	extractOAuthCredentialsFunc = func() ([]byte, error) { return nil, ErrNoOAuthCredentials }
+	defer func() { extractOAuthCredentialsFunc = origOAuth }()
+
+	// Track whether createProfileTar was called
+	called := false
+	origTar := createProfileTarFunc
+	createProfileTarFunc = func(homeDir string) ([]byte, error) {
+		called = true
+		return []byte{}, nil // Empty tar = syncProfileToVM returns early before SSH
+	}
+	defer func() { createProfileTarFunc = origTar }()
+
+	manager := NewManager("/test/project", session.VagrantSettings{})
+	manager.writeFileToVMFunc = func(remotePath string, content []byte) error {
+		return nil
+	}
+
+	if err := manager.SyncClaudeConfig(); err != nil {
+		t.Fatalf("SyncClaudeConfig returned error: %v", err)
+	}
+
+	if !called {
+		t.Error("SyncClaudeConfig should call createProfileTarFunc (step 7)")
 	}
 }
 

@@ -102,26 +102,54 @@ func (m *Manager) SyncClaudeConfig() error {
 	// 6. Write user-level CLAUDE.md with VM context so it's pre-loaded on session start.
 	// Skills are lazy-loaded (descriptions in context, full content only when invoked).
 	// CLAUDE.md is always loaded in full, ensuring Claude has VM instructions immediately.
-	claudeMD := getVMClaudeMD()
+	claudeMD := getMergedVMClaudeMD()
 	if err := writeFunc("~/.claude/CLAUDE.md", []byte(claudeMD)); err != nil {
 		// Non-fatal
+	}
+
+	// 7. Batch sync profile directories (skills, commands, agents, rules)
+	if err := m.syncProfileToVM(); err != nil {
+		// Non-fatal: continue even if profile sync fails
 	}
 
 	return nil
 }
 
-// getVMClaudeMD returns the content for ~/.claude/CLAUDE.md inside the VM.
-// This extracts the body of the operating-in-vagrant skill (stripping YAML
-// frontmatter) so the VM context is pre-loaded on every Claude Code session
-// without requiring the user to invoke the skill.
-func getVMClaudeMD() string {
+// getMergedVMClaudeMD returns the content for ~/.claude/CLAUDE.md inside the VM.
+// It merges two sources:
+//  1. VM context from the operating-in-vagrant skill (YAML frontmatter stripped)
+//  2. The user's host ~/.claude/CLAUDE.md (if it exists)
+//
+// The VM context is always present; the user's content is appended after a separator.
+// This ensures Claude has both VM instructions and any user-specific global context.
+func getMergedVMClaudeMD() string {
+	// VM context (always present)
 	skill := GetVagrantSudoSkill()
-	// Strip YAML frontmatter (content between first pair of "---" lines)
 	parts := strings.SplitN(skill, "---", 3)
+	vmContent := skill
 	if len(parts) == 3 {
-		return strings.TrimSpace(parts[2])
+		vmContent = strings.TrimSpace(parts[2])
 	}
-	return skill
+
+	// Try to append user's host CLAUDE.md
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return vmContent
+	}
+
+	hostCLAUDEMD := filepath.Join(homeDir, ".claude", "CLAUDE.md")
+	userData, err := os.ReadFile(hostCLAUDEMD)
+	if err != nil {
+		return vmContent // No host CLAUDE.md — VM-only content
+	}
+
+	userContent := strings.TrimSpace(string(userData))
+	if userContent == "" {
+		return vmContent
+	}
+
+	// Merge: VM context first, then user content
+	return vmContent + "\n\n---\n\n" + userContent
 }
 
 // stripMCPServers removes the "mcpServers" key from a JSON config file.
@@ -138,10 +166,15 @@ func stripMCPServers(data []byte) []byte {
 //   - mcpServers: references host-local binaries
 //   - installMethod: host says "native" but VM uses npm global install,
 //     causing Claude Code to look for ~/.local/bin/claude which doesn't exist
-//   - oauthAccount: OAuth tokens live in the host's system keychain and can't
-//     transfer; leaving this causes confusing "Not logged in" vs stale token errors
+//
+// Note: oauthAccount is intentionally KEPT. The VM receives the full credentials
+// file (including refreshToken) via SyncClaudeConfig. With oauthAccount present,
+// Claude Code inside the VM (running on Linux) reads ~/.claude/.credentials.json,
+// detects an expired accessToken, and uses the refreshToken to obtain a fresh one.
+// Without oauthAccount, Claude Code doesn't attempt the OAuth refresh flow and
+// fails with "OAuth token has expired" (401).
 func stripHostOnlyFields(data []byte) []byte {
-	return stripJSONKeys(data, []string{"mcpServers", "installMethod", "oauthAccount"})
+	return stripJSONKeys(data, []string{"mcpServers", "installMethod"})
 }
 
 // stripSettingsForVM removes keys from ~/.claude/settings.json that don't work

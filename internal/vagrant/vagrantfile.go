@@ -159,7 +159,7 @@ func (m *Manager) generateVagrantfile() string {
 	// Memory and CPU defaults
 	memory := m.settings.MemoryMB
 	if memory <= 0 {
-		memory = 4096
+		memory = 16384
 	}
 	cpus := m.settings.CPUs
 	if cpus <= 0 {
