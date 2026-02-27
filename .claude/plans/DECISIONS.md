@@ -1,5 +1,11 @@
 # Architecture Decisions
 
+## 2026-02-27 - Plan Review: 24 → 28 Tasks with Specific TDD
+
+**Context**: Cross-model review (Gemini 2.5 Pro + Claude Opus 4.6) found 11 gaps in the agent plan vs design doc. Critical: no Bubble Tea message type definitions. High: missing keyboard shortcuts (n/d/K/m), no sort order logic, TDD steps too vague for LLM implementation.
+**Decision**: Added 4 new tasks (1.4 message types, 1.5 sort order, 3.3 create/delete, 3.4 move flow). Enhanced all 28 TDD RED steps with 5-8 named test cases including inputs, expected outputs, and edge cases. Embedded error handling scenarios from design doc directly into task steps. Added batch sort order update to prevent N individual DB writes.
+**Consequences**: Plan is now specific enough for an LLM to implement each task without ambiguity. TDD test cases serve as acceptance criteria. Gemini 3.1 Pro validated with PASS verdict.
+
 ## 2026-02-27 - Phase 0: Separate home.go Refactoring PR
 
 **Context**: Multi-model design review (Gemini 3.1 Pro advocate, Gemini 2.5 Pro challenger) identified risk in decomposing 9031-line home.go while simultaneously adding kanban features. Mixing refactoring with new logic makes it hard to isolate bugs.

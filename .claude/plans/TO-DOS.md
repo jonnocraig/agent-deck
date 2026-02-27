@@ -21,7 +21,25 @@
   - [ ] **Phase 6: Conductor** — YOLO mode, zen consensus gates, conductor lifecycle
   - [ ] **Phase 7: Skills** — 4 new skills (backlog, review, done, self-evolve)
 
-## Completed This Session (2026-02-27 — Design Review + Plan Enrichment)
+## Completed This Session (2026-02-27 — Plan Review + TDD Enhancement)
+
+- [x] Cross-model plan review (Gemini 2.5 Pro via clink + Claude Opus 4.6)
+- [x] Found 1 CRITICAL, 4 HIGH, 3 MEDIUM, 3 LOW issues in plan vs design doc
+- [x] Added Task 1.4: Bubble Tea message types (22 structs in kanban_messages.go)
+- [x] Added Task 1.5: Sort order calculation + rebalancing with batch DB update
+- [x] Added Tasks 3.3, 3.4: Missing n/d/K/m keyboard handlers
+- [x] Enhanced ALL TDD RED steps with 5-8 specific test cases per task
+- [x] Added "All Sessions" flat list exception to Task 2.4
+- [x] Embedded error handling scenarios from design doc into task steps
+- [x] Added YAML config schema to Task 5.2
+- [x] Added golden file test helper to Task 0.3
+- [x] Added error types (TransitionError, SkillFailedError, RollbackError) to Task 5.1
+- [x] Fixed design doc wrong file path: statedb.go → storage.go/migration.go
+- [x] Validation pass by Gemini 3.1 Pro: PASS verdict
+- [x] Applied Gemini's refinements: batch sort update, cancel-restores-state test
+- [x] Updated plan from 24 → 28 tasks
+
+## Completed Previous Session (2026-02-27 — Design Review + Plan Enrichment)
 
 - [x] Ran multi-model design review via zen consensus (Gemini 3.1 Pro + Gemini 2.5 Pro)
 - [x] GPT-5.2 quota exhausted — used Gemini 2.5 Pro as challenger instead

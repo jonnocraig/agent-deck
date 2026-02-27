@@ -289,8 +289,9 @@ internal/session/
 ├── instance.go                # Modified: +6 fields (kanban, description, AC, automation)
 └── groups.go                  # Reused as-is for sidebar data
 
-internal/statedb/
-└── statedb.go                 # Modified: migration for new tables + columns
+internal/session/
+├── storage.go                 # Modified: migration for new tables + columns, CRUD methods
+└── migration.go               # Modified: new migration for kanban schema
 ```
 
 | Component | Responsibility | Key State |
@@ -719,7 +720,7 @@ Each skill reads the previous column's output artifacts. The Conductor (YOLO mod
 | Phase | Scope | Dependencies | New Files | Modified Files |
 |-------|-------|-------------|-----------|----------------|
 | **0: Refactor** | Decompose home.go into kanban component files. Extract existing logic only — zero new features. App must be functionally identical after this phase. Separate PR, merged and stabilized before Phase 1. | None | 7 (kanban_board.go, kanban_card.go, kanban_sidebar.go, kanban_detail.go, kanban_nav.go, kanban_transition.go, kanban_conductor.go) | 1 (home.go) |
-| **1: Data Layer** | SQLite migration, Instance fields, persistence, GroupKanbanConfig | Phase 0 | 0 | 3 (statedb.go, instance.go, groups.go) |
+| **1: Data Layer** | SQLite migration, Instance fields, persistence, GroupKanbanConfig | Phase 0 | 0 | 3 (storage.go, migration.go, instance.go) |
 | **2: Board UI** | KanbanBoard, KanbanCard, KanbanSidebar rendering | Phase 1 | 0 (files created in Phase 0) | 3 (kanban_board.go, kanban_card.go, kanban_sidebar.go) |
 | **3: Navigation** | KanbanNav 2D cursor, Tab focus, column jump, scroll | Phase 2 | 0 (file created in Phase 0) | 1 (kanban_nav.go) |
 | **4: Detail Panel** | KanbanDetail editable fields, Space toggle, edit mode | Phase 3 | 0 (file created in Phase 0) | 1 (kanban_detail.go) |
