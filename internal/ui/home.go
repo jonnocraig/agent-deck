@@ -225,6 +225,13 @@ type Home struct {
 	// Watcher warning (shown if fsnotify may not work, e.g., on 9p/NFS)
 	watcherWarning string
 
+	// Kanban mode state
+	kanbanMode         bool                // True when displaying the kanban board view
+	kanbanFocus        FocusPanel          // Which kanban panel has focus (sidebar/board/detail)
+	kanbanSelectedCol  int                 // Currently selected column index (0-5)
+	kanbanSelectedRow  int                 // Currently selected card index within column
+	kanbanSidebarState KanbanSidebarState  // Sidebar state (groups, selection, focus)
+
 	// Update notification (async check on startup)
 	updateInfo *update.UpdateInfo
 
@@ -3641,6 +3648,11 @@ func (h *Home) handleNewDialogKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // handleMainKey handles keys in main view
 func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// When kanban mode is active, route most keys to the kanban handler
+	if h.kanbanMode {
+		return h.handleKanbanKey(msg)
+	}
+
 	switch msg.String() {
 	case "q", "ctrl+c":
 		return h.tryQuit()
@@ -4306,6 +4318,15 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			cmd := h.geminiModelDialog.Show(inst.ID, inst.GeminiModel)
 			return h, cmd
 		}
+		return h, nil
+
+	case "ctrl+k":
+		// Enter kanban board mode
+		h.kanbanMode = true
+		h.kanbanFocus = PanelBoard
+		h.kanbanSelectedCol = 0
+		h.kanbanSelectedRow = 0
+		h.rebuildKanbanSidebar()
 		return h, nil
 
 	case "ctrl+z":
@@ -5842,17 +5863,21 @@ func (h *Home) View() string {
 	// Height breakdown: -1 header, -filterBarHeight filter, -updateBannerHeight banner, -maintenanceBannerHeight maintenance, -helpBarHeight help
 	contentHeight := h.height - 1 - helpBarHeight - updateBannerHeight - maintenanceBannerHeight - filterBarHeight
 
-	// Route to appropriate layout based on terminal width
-	layoutMode := h.getLayoutMode()
-
+	// Route to kanban board or standard layout
 	var mainContent string
-	switch layoutMode {
-	case LayoutModeSingle:
-		mainContent = h.renderSingleColumnLayout(contentHeight)
-	case LayoutModeStacked:
-		mainContent = h.renderStackedLayout(contentHeight)
-	default: // LayoutModeDual
-		mainContent = h.renderDualColumnLayout(contentHeight)
+	if h.kanbanMode {
+		mainContent = h.renderKanbanLayout(contentHeight)
+	} else {
+		// Route to appropriate layout based on terminal width
+		layoutMode := h.getLayoutMode()
+		switch layoutMode {
+		case LayoutModeSingle:
+			mainContent = h.renderSingleColumnLayout(contentHeight)
+		case LayoutModeStacked:
+			mainContent = h.renderStackedLayout(contentHeight)
+		default: // LayoutModeDual
+			mainContent = h.renderDualColumnLayout(contentHeight)
+		}
 	}
 
 	// Ensure mainContent has exact height
@@ -6020,6 +6045,207 @@ func (h *Home) finishWorktree(inst *session.Instance, sessionID, sessionTitle, b
 			merged:       merged,
 		}
 	}
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Kanban Board Integration
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// rebuildKanbanSidebar builds the sidebar state from the current groupTree
+func (h *Home) rebuildKanbanSidebar() {
+	var groups []KanbanSidebarGroup
+
+	// "All Sessions" always first
+	groups = append(groups, KanbanSidebarGroup{
+		Name:          "All Sessions",
+		Path:          "",
+		KanbanEnabled: false,
+		SessionCount:  len(h.instances),
+		IsAllSessions: true,
+	})
+
+	// Add root groups
+	if h.groupTree != nil {
+		for _, g := range h.groupTree.GroupList {
+			kanbanEnabled := false
+			if cfg, err := h.storage.GetGroupKanbanConfig(g.Path); err == nil && cfg != nil {
+				kanbanEnabled = cfg.KanbanEnabled
+			}
+			groups = append(groups, KanbanSidebarGroup{
+				Name:          g.Name,
+				Path:          g.Path,
+				KanbanEnabled: kanbanEnabled,
+				SessionCount:  len(g.Sessions),
+			})
+		}
+	}
+
+	h.kanbanSidebarState = KanbanSidebarState{
+		Groups:      groups,
+		SelectedIdx: h.kanbanSidebarState.SelectedIdx,
+		Focused:     h.kanbanFocus == PanelSidebar,
+		Height:      h.height - 5, // account for header, filter, help
+	}
+}
+
+// getKanbanInstances returns instances for the currently selected kanban group
+func (h *Home) getKanbanInstances() []*session.Instance {
+	if len(h.kanbanSidebarState.Groups) == 0 {
+		return nil
+	}
+
+	selected := h.kanbanSidebarState.Groups[h.kanbanSidebarState.SelectedIdx]
+
+	// "All Sessions" shows everything
+	if selected.IsAllSessions {
+		h.instancesMu.RLock()
+		defer h.instancesMu.RUnlock()
+		result := make([]*session.Instance, len(h.instances))
+		copy(result, h.instances)
+		return result
+	}
+
+	// Filter to group
+	h.instancesMu.RLock()
+	defer h.instancesMu.RUnlock()
+	var result []*session.Instance
+	for _, inst := range h.instances {
+		if inst.GroupPath == selected.Path {
+			result = append(result, inst)
+		}
+	}
+	return result
+}
+
+// renderKanbanLayout renders the full kanban layout: sidebar | board
+func (h *Home) renderKanbanLayout(contentHeight int) string {
+	// Update sidebar height
+	h.kanbanSidebarState.Height = contentHeight
+	h.kanbanSidebarState.Focused = (h.kanbanFocus == PanelSidebar)
+
+	// Render sidebar
+	sidebar := renderKanbanSidebar(h.kanbanSidebarState)
+
+	// Separator
+	separatorStyle := lipgloss.NewStyle().Foreground(ColorBorder)
+	separatorLines := make([]string, contentHeight)
+	for i := range separatorLines {
+		separatorLines[i] = separatorStyle.Render("│")
+	}
+	separator := strings.Join(separatorLines, "\n")
+
+	// Render board
+	instances := h.getKanbanInstances()
+	boardWidth := h.width - kanbanSidebarWidth - 1 // -1 for separator
+	board := renderKanbanBoard(instances, boardWidth, contentHeight, h.kanbanSelectedCol, h.kanbanSelectedRow, 0)
+
+	// Join horizontally
+	result := lipgloss.JoinHorizontal(lipgloss.Top, sidebar, separator, board)
+	result = lipgloss.NewStyle().MaxWidth(h.width).Render(result)
+
+	return result
+}
+
+// handleKanbanKey handles keyboard input when in kanban mode
+func (h *Home) handleKanbanKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+
+	switch key {
+	case "q", "ctrl+c":
+		return h.tryQuit()
+
+	case "esc", "ctrl+k":
+		// Exit kanban mode, return to normal list view
+		h.kanbanMode = false
+		return h, nil
+
+	case "tab":
+		// Toggle focus between sidebar and board
+		if h.kanbanFocus == PanelSidebar {
+			h.kanbanFocus = PanelBoard
+		} else {
+			h.kanbanFocus = PanelSidebar
+		}
+		h.kanbanSidebarState.Focused = (h.kanbanFocus == PanelSidebar)
+		return h, nil
+
+	case "1", "2", "3", "4", "5", "6":
+		// Jump to column (board only)
+		if h.kanbanFocus == PanelBoard {
+			h.kanbanSelectedCol = int(key[0]-'0') - 1
+			h.kanbanSelectedRow = 0
+		}
+		return h, nil
+
+	case "enter":
+		// Attach to selected session (board only)
+		if h.kanbanFocus == PanelBoard {
+			instances := h.getKanbanInstances()
+			card := h.findKanbanCard(instances)
+			if card != nil {
+				return h, h.attachSession(card)
+			}
+		}
+		return h, nil
+
+	case "?":
+		// Show help overlay
+		h.helpOverlay.Show()
+		h.helpOverlay.SetSize(h.width, h.height)
+		return h, nil
+	}
+
+	// Route navigation keys based on focus
+	if h.kanbanFocus == PanelSidebar {
+		h.kanbanSidebarState = updateKanbanSidebarNav(h.kanbanSidebarState, key)
+		return h, nil
+	}
+
+	// Board navigation
+	switch key {
+	case "h", "left":
+		if h.kanbanSelectedCol > 0 {
+			h.kanbanSelectedCol--
+			h.kanbanSelectedRow = 0
+		}
+	case "l", "right":
+		if h.kanbanSelectedCol < 5 {
+			h.kanbanSelectedCol++
+			h.kanbanSelectedRow = 0
+		}
+	case "j", "down":
+		h.kanbanSelectedRow++
+	case "k", "up":
+		if h.kanbanSelectedRow > 0 {
+			h.kanbanSelectedRow--
+		}
+	}
+
+	return h, nil
+}
+
+// findKanbanCard finds the card at the current kanban cursor position
+func (h *Home) findKanbanCard(instances []*session.Instance) *session.Instance {
+	// Group by column
+	columnCards := make(map[session.KanbanColumn][]*session.Instance)
+	for _, inst := range instances {
+		if inst.KanbanColumn != nil {
+			col := *inst.KanbanColumn
+			columnCards[col] = append(columnCards[col], inst)
+		}
+	}
+
+	// Get the target column
+	if h.kanbanSelectedCol < 0 || h.kanbanSelectedCol >= len(kanbanColumnsOrdered) {
+		return nil
+	}
+	col := kanbanColumnsOrdered[h.kanbanSelectedCol]
+	cards := columnCards[col]
+
+	if h.kanbanSelectedRow >= 0 && h.kanbanSelectedRow < len(cards) {
+		return cards[h.kanbanSelectedRow]
+	}
+	return nil
 }
 
 // getOtherActiveSessions returns sessions excluding the given ID and error-status sessions.

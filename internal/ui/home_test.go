@@ -1014,3 +1014,178 @@ func TestRestartSessionCmdSessionMissingReturnsError(t *testing.T) {
 		t.Fatalf("unexpected error: %v", restarted.err)
 	}
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Kanban Integration Tests
+// ═══════════════════════════════════════════════════════════════════════════════
+
+func TestHomeKanbanToggle(t *testing.T) {
+	home := NewHome()
+	home.width = 120
+	home.height = 40
+	home.initialLoading = false
+
+	// Initially not in kanban mode
+	if home.kanbanMode {
+		t.Error("should not start in kanban mode")
+	}
+
+	// Press ctrl+k to enter kanban mode
+	msg := tea.KeyMsg{Type: tea.KeyCtrlK}
+	model, _ := home.Update(msg)
+	h := model.(*Home)
+	if !h.kanbanMode {
+		t.Error("ctrl+k should enable kanban mode")
+	}
+	if h.kanbanFocus != PanelBoard {
+		t.Errorf("focus should be PanelBoard, got %d", h.kanbanFocus)
+	}
+
+	// Press Esc to exit kanban mode
+	escMsg := tea.KeyMsg{Type: tea.KeyEscape}
+	model, _ = h.Update(escMsg)
+	h = model.(*Home)
+	if h.kanbanMode {
+		t.Error("Esc should disable kanban mode")
+	}
+}
+
+func TestHomeKanbanRouting(t *testing.T) {
+	home := NewHome()
+	home.width = 120
+	home.height = 40
+	home.initialLoading = false
+	home.kanbanMode = true
+	home.kanbanFocus = PanelBoard
+
+	// Rebuild sidebar for rendering
+	home.rebuildKanbanSidebar()
+
+	// View should render without panicking
+	view := home.View()
+	if view == "" {
+		t.Error("kanban view should not be empty")
+	}
+}
+
+func TestHomeKanbanRouting_AllSessions(t *testing.T) {
+	home := NewHome()
+	home.width = 120
+	home.height = 40
+	home.initialLoading = false
+	home.kanbanMode = true
+	home.kanbanFocus = PanelBoard
+	home.rebuildKanbanSidebar()
+
+	// First sidebar item should be "All Sessions"
+	if len(home.kanbanSidebarState.Groups) == 0 {
+		t.Fatal("sidebar should have at least All Sessions")
+	}
+	if !home.kanbanSidebarState.Groups[0].IsAllSessions {
+		t.Error("first sidebar entry should be All Sessions")
+	}
+	if home.kanbanSidebarState.Groups[0].Name != "All Sessions" {
+		t.Errorf("first entry name = %q, want 'All Sessions'", home.kanbanSidebarState.Groups[0].Name)
+	}
+}
+
+func TestHomeKanbanDisabled(t *testing.T) {
+	home := NewHome()
+	home.width = 120
+	home.height = 40
+	home.initialLoading = false
+	home.kanbanMode = false
+
+	// View should render the standard list, not the kanban board
+	view := home.View()
+	if view == "" {
+		t.Error("view should not be empty")
+	}
+	// Standard view has "SESSIONS" panel title (not kanban column headers)
+	// This is a smoke test — the exact content depends on having instances
+}
+
+func TestHomeKanbanTabFocus(t *testing.T) {
+	home := NewHome()
+	home.width = 120
+	home.height = 40
+	home.initialLoading = false
+	home.kanbanMode = true
+	home.kanbanFocus = PanelBoard
+	home.rebuildKanbanSidebar()
+
+	// Press Tab to switch focus to sidebar
+	tabMsg := tea.KeyMsg{Type: tea.KeyTab}
+	model, _ := home.Update(tabMsg)
+	h := model.(*Home)
+	if h.kanbanFocus != PanelSidebar {
+		t.Errorf("Tab should switch to PanelSidebar, got %d", h.kanbanFocus)
+	}
+
+	// Press Tab again to switch back to board
+	model, _ = h.Update(tabMsg)
+	h = model.(*Home)
+	if h.kanbanFocus != PanelBoard {
+		t.Errorf("Tab should switch back to PanelBoard, got %d", h.kanbanFocus)
+	}
+}
+
+func TestHomeKanbanColumnJump(t *testing.T) {
+	home := NewHome()
+	home.width = 120
+	home.height = 40
+	home.initialLoading = false
+	home.kanbanMode = true
+	home.kanbanFocus = PanelBoard
+	home.rebuildKanbanSidebar()
+
+	// Press '3' to jump to Plan column (index 2)
+	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}}
+	model, _ := home.Update(msg)
+	h := model.(*Home)
+	if h.kanbanSelectedCol != 2 {
+		t.Errorf("pressing 3 should select column 2 (Plan), got %d", h.kanbanSelectedCol)
+	}
+
+	// Press '6' to jump to Done column (index 5)
+	msg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'6'}}
+	model, _ = h.Update(msg)
+	h = model.(*Home)
+	if h.kanbanSelectedCol != 5 {
+		t.Errorf("pressing 6 should select column 5 (Done), got %d", h.kanbanSelectedCol)
+	}
+}
+
+func TestHomeKanbanBoardNavigation(t *testing.T) {
+	home := NewHome()
+	home.width = 120
+	home.height = 40
+	home.initialLoading = false
+	home.kanbanMode = true
+	home.kanbanFocus = PanelBoard
+	home.kanbanSelectedCol = 0
+	home.rebuildKanbanSidebar()
+
+	// Press 'l' to move right
+	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}}
+	model, _ := home.Update(msg)
+	h := model.(*Home)
+	if h.kanbanSelectedCol != 1 {
+		t.Errorf("l should move to col 1, got %d", h.kanbanSelectedCol)
+	}
+
+	// Press 'h' to move left
+	msg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}}
+	model, _ = h.Update(msg)
+	h = model.(*Home)
+	if h.kanbanSelectedCol != 0 {
+		t.Errorf("h should move to col 0, got %d", h.kanbanSelectedCol)
+	}
+
+	// Press 'h' at leftmost — should clamp to 0
+	model, _ = h.Update(msg)
+	h = model.(*Home)
+	if h.kanbanSelectedCol != 0 {
+		t.Errorf("h at col 0 should stay 0, got %d", h.kanbanSelectedCol)
+	}
+}

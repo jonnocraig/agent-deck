@@ -265,3 +265,102 @@ func (h *Home) renderSessionList(width, height int) string {
 	// Height padding is handled by ensureExactHeight() in View() for consistency
 	return b.String()
 }
+
+// ────────────────────────────────────────────────────────────────────────────
+// Kanban Board Card Rendering
+// ────────────────────────────────────────────────────────────────────────────
+
+// truncateTitle truncates a title to maxWidth characters with ellipsis.
+// Uses simple rune-based truncation since we need to handle ANSI-styled content.
+func truncateTitle(title string, maxWidth int) string {
+	if len(title) <= maxWidth {
+		return title
+	}
+	if maxWidth <= 3 {
+		return title[:maxWidth]
+	}
+	return title[:maxWidth-3] + "..."
+}
+
+// kanbanStatusIcon returns the icon and style for a given status.
+// Used for compact kanban card rendering.
+func kanbanStatusIcon(status session.Status) (icon string, style lipgloss.Style) {
+	switch status {
+	case session.StatusRunning:
+		return "●", SessionStatusRunning
+	case session.StatusWaiting:
+		return "◐", SessionStatusWaiting
+	case session.StatusIdle:
+		return "○", SessionStatusIdle
+	case session.StatusError:
+		return "✕", SessionStatusError
+	default:
+		return "○", SessionStatusIdle
+	}
+}
+
+// renderKanbanCard renders a compact single-line kanban card.
+// Format: [yolo_icon] [status_icon] [title]
+// - width: total card width in characters
+// - selected: whether this card is currently selected
+// Returns empty string if inst is nil.
+func renderKanbanCard(inst *session.Instance, width int, selected bool) string {
+	if inst == nil {
+		return ""
+	}
+
+	// Get status icon and style
+	instStatus := inst.GetStatusThreadSafe()
+	icon, iconStyle := kanbanStatusIcon(instStatus)
+
+	// Title style based on status and selection
+	var titleStyle lipgloss.Style
+	if selected {
+		titleStyle = SessionTitleSelStyle
+		iconStyle = SessionStatusSelStyle
+	} else {
+		switch instStatus {
+		case session.StatusRunning, session.StatusWaiting:
+			titleStyle = SessionTitleActive
+		case session.StatusError:
+			titleStyle = SessionTitleError
+		default:
+			titleStyle = SessionTitleDefault
+		}
+	}
+
+	// Calculate available width for title
+	// Format: "[icon] [title]" = 2 chars for icon+space, 2 for padding
+	// If YOLO mode: "🤖 [icon] [title]" = additional 3 chars for robot+space
+	availWidth := width - 4 // base: icon + space + padding
+	yoloPrefix := ""
+	if inst.AutomationMode == session.AutomationYOLO {
+		yoloPrefix = "🤖 "
+		availWidth -= 3
+	}
+
+	// Ensure minimum width
+	if availWidth < 3 {
+		availWidth = 3
+	}
+
+	// Truncate title to fit
+	title := truncateTitle(inst.Title, availWidth)
+
+	// Render components
+	styledIcon := iconStyle.Render(icon)
+	styledTitle := titleStyle.Render(title)
+
+	// Build card
+	card := fmt.Sprintf("%s%s %s", yoloPrefix, styledIcon, styledTitle)
+
+	// Add background for selected cards
+	if selected {
+		cardStyle := lipgloss.NewStyle().
+			Background(ColorSurface).
+			Padding(0, 1)
+		return cardStyle.Render(card)
+	}
+
+	return card
+}

@@ -652,3 +652,257 @@ func renderQuittingSplash(width, height int, frame int) string {
 		contentStyle.Render(content.String()),
 	)
 }
+
+// Kanban board rendering
+
+// kanbanColumnAbbrev maps KanbanColumn to abbreviated names for narrow displays
+var kanbanColumnAbbrev = map[session.KanbanColumn]string{
+	session.KanbanBacklog:   "BL",
+	session.KanbanDesign:    "DE",
+	session.KanbanPlan:      "PL",
+	session.KanbanImplement: "IM",
+	session.KanbanReview:    "RE",
+	session.KanbanDone:      "DO",
+}
+
+// kanbanColumnNames maps KanbanColumn to full names for wider displays
+var kanbanColumnNames = map[session.KanbanColumn]string{
+	session.KanbanBacklog:   "Backlog",
+	session.KanbanDesign:    "Design",
+	session.KanbanPlan:      "Plan",
+	session.KanbanImplement: "Implement",
+	session.KanbanReview:    "Review",
+	session.KanbanDone:      "Done",
+}
+
+// kanbanColumnsOrdered defines all 6 columns in display order
+var kanbanColumnsOrdered = []session.KanbanColumn{
+	session.KanbanBacklog,
+	session.KanbanDesign,
+	session.KanbanPlan,
+	session.KanbanImplement,
+	session.KanbanReview,
+	session.KanbanDone,
+}
+
+// renderKanbanBoard renders the full kanban board with 6 columns
+// Groups instances by KanbanColumn, sorts by KanbanSortOrder, and renders columns side-by-side
+// In narrow mode (<80 cols), shows only 3 columns with scroll indicators
+func renderKanbanBoard(instances []*session.Instance, width, height, selectedCol, selectedRow int, sidebarWidth int) string {
+	// Handle empty board
+	if len(instances) == 0 {
+		return renderEmptyKanbanBoard(width, height)
+	}
+
+	// Group instances by column
+	columnCards := make(map[session.KanbanColumn][]*session.Instance)
+	for _, inst := range instances {
+		if inst.KanbanColumn != nil {
+			col := *inst.KanbanColumn
+			columnCards[col] = append(columnCards[col], inst)
+		}
+	}
+
+	// Sort each column by KanbanSortOrder
+	for col := range columnCards {
+		cards := columnCards[col]
+		// Simple bubble sort (small N)
+		for i := 0; i < len(cards); i++ {
+			for j := i + 1; j < len(cards); j++ {
+				if cards[i].KanbanSortOrder > cards[j].KanbanSortOrder {
+					cards[i], cards[j] = cards[j], cards[i]
+				}
+			}
+		}
+		columnCards[col] = cards
+	}
+
+	// Calculate available width for board
+	boardWidth := width - sidebarWidth
+
+	// Determine visible columns based on width
+	var visibleCols []session.KanbanColumn
+	var showLeftScroll, showRightScroll bool
+
+	if boardWidth <= 80 {
+		// Narrow mode: show 3 columns centered on selected
+		visibleCols, showLeftScroll, showRightScroll = getVisibleColumns(selectedCol, 3)
+	} else {
+		// Wide mode: show all 6 columns
+		visibleCols = kanbanColumnsOrdered
+	}
+
+	// Calculate column width
+	numVisible := len(visibleCols)
+	colWidth := boardWidth / numVisible
+	if colWidth < 10 {
+		colWidth = 10
+	}
+
+	// Render each column
+	var columns []string
+	for _, col := range visibleCols {
+		cards := columnCards[col]
+		colSelected := (col.Index() == selectedCol)
+		colName := kanbanColumnAbbrev[col]
+		count := len(cards)
+
+		// Render column header (1 line)
+		header := renderKanbanColumnHeader(colName, count, colWidth, colSelected)
+
+		// Render column content (height - 1 for header)
+		contentHeight := height - 1
+		content := renderKanbanColumn(cards, colWidth, contentHeight, selectedRow, colSelected)
+
+		// Combine header + content
+		columnStr := header + "\n" + content
+
+		// Ensure exact height
+		columnStr = ensureExactHeight(columnStr, height)
+
+		// Ensure exact width
+		columnStr = ensureExactWidth(columnStr, colWidth)
+
+		columns = append(columns, columnStr)
+	}
+
+	// Join columns horizontally
+	result := lipgloss.JoinHorizontal(lipgloss.Top, columns...)
+
+	// Add scroll indicators if needed
+	if showLeftScroll || showRightScroll {
+		result = addScrollIndicators(result, width, height, showLeftScroll, showRightScroll)
+	}
+
+	// Ensure exact dimensions
+	result = ensureExactHeight(result, height)
+	result = lipgloss.NewStyle().MaxWidth(width).Render(result)
+
+	return result
+}
+
+// getVisibleColumns returns the visible columns for narrow mode with scroll indicators
+// Returns (visibleColumns, showLeftScroll, showRightScroll)
+func getVisibleColumns(selectedCol, numVisible int) ([]session.KanbanColumn, bool, bool) {
+	totalCols := len(kanbanColumnsOrdered)
+
+	// Ensure selectedCol is valid
+	if selectedCol < 0 {
+		selectedCol = 0
+	}
+	if selectedCol >= totalCols {
+		selectedCol = totalCols - 1
+	}
+
+	// Calculate start/end indices to center selected column
+	start := selectedCol - numVisible/2
+	if start < 0 {
+		start = 0
+	}
+	end := start + numVisible
+	if end > totalCols {
+		end = totalCols
+		start = end - numVisible
+		if start < 0 {
+			start = 0
+		}
+	}
+
+	showLeft := start > 0
+	showRight := end < totalCols
+
+	return kanbanColumnsOrdered[start:end], showLeft, showRight
+}
+
+// renderKanbanColumnHeader renders a column header with abbreviated name and count
+// Format: "BL(2)" - selected columns get accent color highlight
+func renderKanbanColumnHeader(name string, count int, width int, selected bool) string {
+	text := fmt.Sprintf("%s(%d)", name, count)
+
+	var style lipgloss.Style
+	if selected {
+		style = lipgloss.NewStyle().
+			Foreground(ColorBg).
+			Background(ColorAccent).
+			Bold(true).
+			Width(width).
+			Align(lipgloss.Center)
+	} else {
+		style = lipgloss.NewStyle().
+			Foreground(ColorCyan).
+			Bold(true).
+			Width(width).
+			Align(lipgloss.Center)
+	}
+
+	return style.Render(text)
+}
+
+// renderKanbanColumn renders the content of a single column
+// Uses renderKanbanCard from kanban_card.go
+func renderKanbanColumn(cards []*session.Instance, width, height int, selectedRow int, colSelected bool) string {
+	if len(cards) == 0 {
+		// Empty column
+		emptyStyle := lipgloss.NewStyle().
+			Foreground(ColorComment).
+			Align(lipgloss.Center).
+			Width(width)
+		return ensureExactHeight(emptyStyle.Render(""), height)
+	}
+
+	var b strings.Builder
+	for idx, card := range cards {
+		cardSelected := colSelected && (idx == selectedRow)
+		cardStr := renderKanbanCard(card, width, cardSelected)
+		b.WriteString(cardStr)
+		if idx < len(cards)-1 {
+			b.WriteString("\n")
+		}
+	}
+
+	// Pad to exact height
+	return ensureExactHeight(b.String(), height)
+}
+
+// addScrollIndicators adds ◀ ▶ indicators to show there are more columns
+func addScrollIndicators(content string, width, height int, showLeft, showRight bool) string {
+	if !showLeft && !showRight {
+		return content
+	}
+
+	lines := strings.Split(content, "\n")
+	if len(lines) == 0 {
+		return content
+	}
+
+	// Add indicators to the first line (header row)
+	if len(lines) > 0 {
+		line := lines[0]
+		if showLeft {
+			line = "◀ " + line[2:]
+		}
+		if showRight {
+			lineWidth := lipgloss.Width(line)
+			if lineWidth >= 2 {
+				line = line[:lineWidth-2] + " ▶"
+			}
+		}
+		lines[0] = line
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+// renderEmptyKanbanBoard renders an empty state for the kanban board
+func renderEmptyKanbanBoard(width, height int) string {
+	config := EmptyStateConfig{
+		Icon:     "📋",
+		Title:    "Empty Board",
+		Subtitle: "No sessions in kanban mode yet",
+		Hints: []string{
+			"Press 'k' to add a session to the board",
+			"Sessions will appear as cards in columns",
+		},
+	}
+	return renderEmptyStateResponsive(config, width, height)
+}

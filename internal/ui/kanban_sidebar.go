@@ -339,3 +339,128 @@ func (h *Home) getGroupWorktreeInfo(group *session.Group) *groupWorktreeInfo {
 		branches: branches,
 	}
 }
+
+// Kanban sidebar constants
+const kanbanSidebarWidth = 20
+
+// KanbanSidebarState holds the state for the kanban sidebar panel
+type KanbanSidebarState struct {
+	Groups      []KanbanSidebarGroup
+	SelectedIdx int
+	Focused     bool
+	Height      int
+}
+
+// KanbanSidebarGroup represents a group entry in the sidebar
+type KanbanSidebarGroup struct {
+	Name          string
+	Path          string
+	KanbanEnabled bool
+	SessionCount  int
+	IsAllSessions bool
+}
+
+// renderKanbanSidebar renders the kanban sidebar panel with fixed 20-column width.
+// Displays groups vertically with "All Sessions" first, followed by groups.
+// Selected group is highlighted with accent color background.
+// Kanban-enabled groups show " [K]" suffix.
+func renderKanbanSidebar(state KanbanSidebarState) string {
+	var b strings.Builder
+
+	for i, group := range state.Groups {
+		selected := i == state.SelectedIdx
+
+		// Build the line content
+		name := group.Name
+
+		// Add [K] suffix for kanban-enabled groups (but not for "All Sessions")
+		suffix := ""
+		if group.KanbanEnabled && !group.IsAllSessions {
+			suffix = " [K]"
+		}
+
+		// Calculate max width for name to fit within sidebar
+		// sidebar width (20) minus suffix length minus padding (2)
+		maxNameWidth := kanbanSidebarWidth - len(suffix) - 2
+		if maxNameWidth < 1 {
+			maxNameWidth = 1
+		}
+
+		// Truncate name if needed
+		if len(name) > maxNameWidth {
+			if maxNameWidth > 3 {
+				name = name[:maxNameWidth-3] + "..."
+			} else {
+				name = name[:maxNameWidth]
+			}
+		}
+
+		// Build the full text
+		text := " " + name + suffix
+
+		// Apply styling based on selection
+		var line string
+		if selected {
+			// Selected: accent background
+			style := lipgloss.NewStyle().
+				Foreground(ColorBg).
+				Background(ColorAccent).
+				Bold(true).
+				Width(kanbanSidebarWidth)
+			line = style.Render(text)
+		} else {
+			// Unselected: default text color
+			style := lipgloss.NewStyle().
+				Foreground(ColorText).
+				Width(kanbanSidebarWidth)
+			line = style.Render(text)
+		}
+
+		b.WriteString(line)
+		if i < len(state.Groups)-1 {
+			b.WriteString("\n")
+		}
+	}
+
+	// Use ensureExactHeight and ensureExactWidth to guarantee dimensions
+	content := b.String()
+	content = ensureExactHeight(content, state.Height)
+	content = ensureExactWidth(content, kanbanSidebarWidth)
+
+	return content
+}
+
+// updateKanbanSidebarNav processes keyboard input for sidebar navigation.
+// Only processes keys when state.Focused is true.
+// Returns a new state (immutable pattern).
+func updateKanbanSidebarNav(state KanbanSidebarState, key string) KanbanSidebarState {
+	// Ignore all input if not focused
+	if !state.Focused {
+		return state
+	}
+
+	// Ignore if no groups
+	if len(state.Groups) == 0 {
+		return state
+	}
+
+	newState := state
+
+	switch key {
+	case "j", "down":
+		// Move down
+		if newState.SelectedIdx < len(newState.Groups)-1 {
+			newState.SelectedIdx++
+		}
+	case "k", "up":
+		// Move up
+		if newState.SelectedIdx > 0 {
+			newState.SelectedIdx--
+		}
+	default:
+		// Ignore all other keys
+		return state
+	}
+
+	return newState
+}
