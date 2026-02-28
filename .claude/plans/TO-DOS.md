@@ -11,14 +11,23 @@
   - [x] Cross-model plan review + TDD enhancement
   - [x] **Phase 0: Refactor** — home.go decomposed into 7 kanban_*.go files (b80441d)
   - [x] **Phase 1: Data Layer** — types, schema v2, CRUD, messages, sort order (9b7ea91)
-  - [ ] **Phase 2: Board UI** — KanbanBoard, KanbanCard, KanbanSidebar rendering (**NEXT**)
-  - [ ] **Phase 3: Navigation** — KanbanNav 2D cursor, Tab focus, column jump, scroll
+  - [x] **Phase 2: Board UI** — KanbanBoard, KanbanCard, KanbanSidebar rendering (146dc92)
+  - [ ] **Phase 3: Navigation** — KanbanNav 2D cursor, Tab focus, column jump, scroll (**NEXT**)
   - [ ] **Phase 4: Detail Panel** — KanbanDetail editable fields, Space toggle, edit mode
   - [ ] **Phase 5: Transitions** — TransitionEngine, skill triggers, 3-tier config, rollback
   - [ ] **Phase 6: Conductor** — YOLO mode, zen consensus gates, conductor lifecycle
   - [ ] **Phase 7: Skills** — 4 new skills (backlog, review, done, self-evolve)
 
-## Completed This Session (2026-02-27 — Wave 2 Implementation)
+## Completed This Session (2026-02-28 — Wave 3 Implementation)
+
+- [x] Task 2.1: KanbanBoard 6-column layout, responsive breakpoints, empty state (6 tests)
+- [x] Task 2.2: KanbanCard compact rendering, status icons, YOLO badge, truncation (10 tests)
+- [x] Task 2.3: KanbanSidebar group list, [K] indicator, j/k nav, fixed 20-col (8 tests)
+- [x] Task 2.4: Integrate kanban into home.go — ctrl+k toggle, View/Update routing (7 tests)
+- [x] Wave 3 quality gates: build pass, vet pass, test-suite pass (16/16 packages, 31 kanban tests)
+- [x] Wave 3 committed: 146dc92
+
+## Completed Previous Session (2026-02-27 — Wave 2 Implementation)
 
 - [x] Task 1.1: Define KanbanColumn type + Instance fields (7 tests pass)
 - [x] Task 1.2: Create SQLite migrations — schema v2, 7 ALTER TABLEs, 2 new tables (8 tests pass)
