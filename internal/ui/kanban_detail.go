@@ -1481,3 +1481,267 @@ func getSessionContent(inst *session.Instance) (string, error) {
 
 	return content, nil
 }
+
+// --- Kanban Detail Panel (Task 4.1) ---
+
+// KanbanDetailState represents the state for rendering the kanban detail panel.
+// This is a value type for rendering, not a Bubble Tea component.
+type KanbanDetailState struct {
+	Instance     *session.Instance // Current session to display (nil = nothing selected)
+	Visible      bool              // Whether the detail panel is shown
+	Editing      bool              // Whether in edit mode (task 4.2 will implement this)
+	FocusedField int               // Which field is focused in edit mode
+	Width        int               // Available width for rendering
+	Height       int               // Available height (40% of terminal)
+}
+
+// renderKanbanDetail renders the kanban detail panel.
+// Returns empty string if not visible or no instance selected.
+func renderKanbanDetail(state KanbanDetailState) string {
+	if !state.Visible || state.Instance == nil {
+		return ""
+	}
+
+	inst := state.Instance
+	var lines []string
+
+	// Calculate max width for content (account for border + padding)
+	// Border = 2 chars per side, Padding = 1 char per side = 6 total
+	maxContentWidth := state.Width - 6
+	if maxContentWidth < 20 {
+		maxContentWidth = 20
+	}
+
+	// Field index counter for edit mode
+	fieldIdx := 0
+
+	// Helper to add a field with optional edit marker, truncating to fit
+	addField := func(label, value string, editable bool) {
+		marker := ""
+		focusIndicator := ""
+
+		if editable {
+			if state.Editing {
+				// In edit mode: show focus indicator on the focused field
+				if fieldIdx == state.FocusedField {
+					focusIndicator = " ▶ "
+				} else {
+					focusIndicator = "   "
+				}
+			} else {
+				// Not in edit mode: show [e] marker
+				marker = " [e]"
+			}
+			fieldIdx++
+		}
+
+		line := fmt.Sprintf("%s%s:%s %s", focusIndicator, label, marker, value)
+
+		// Truncate line if it exceeds max width
+		if runewidth.StringWidth(line) > maxContentWidth {
+			line = truncateToWidth(line, maxContentWidth)
+		}
+		lines = append(lines, line)
+	}
+
+	// Editable fields (0-5 in order)
+	addField("Title", inst.Title, true)
+
+	addField("Description", inst.Description, true)
+
+	addField("Acceptance Criteria", inst.AcceptCriteria, true)
+
+	column := ""
+	if inst.KanbanColumn != nil {
+		column = inst.KanbanColumn.String()
+	}
+	addField("Column", column, true)
+
+	autoMode := "disabled"
+	if inst.AutomationMode != "" {
+		autoMode = string(inst.AutomationMode)
+	}
+	addField("Automation", autoMode, true)
+
+	yoloMode := "disabled"
+	if inst.AutomationMode == session.AutomationYOLO {
+		yoloMode = "yolo"
+	}
+	addField("YOLO", yoloMode, true)
+
+	// Read-only fields (no markers)
+	addField("Status", string(inst.Status), false)
+
+	tool := inst.Tool
+	if tool == "" {
+		tool = "shell"
+	}
+	addField("Tool", tool, false)
+
+	worktree := inst.WorktreePath
+	if worktree == "" {
+		worktree = "(none)"
+	}
+	addField("Worktree Path", worktree, false)
+
+	branch := inst.WorktreeBranch
+	if branch == "" {
+		branch = "(none)"
+	}
+	addField("Worktree Branch", branch, false)
+
+	addField("Project Path", inst.ProjectPath, false)
+
+	model := inst.GeminiModel
+	if model == "" {
+		model = "(default)"
+	}
+	addField("Model", model, false)
+
+	mcpList := "(none)"
+	if len(inst.LoadedMCPNames) > 0 {
+		mcpList = strings.Join(inst.LoadedMCPNames, ", ")
+	}
+	addField("MCP Servers", mcpList, false)
+
+	prompt := inst.LatestPrompt
+	if prompt == "" {
+		prompt = "(none)"
+	}
+	addField("Last Prompt", prompt, false)
+
+	// Add edit mode help footer
+	if state.Editing {
+		lines = append(lines, "")
+		helpStyle := lipgloss.NewStyle().Foreground(ColorTextDim).Italic(true)
+		helpLine := helpStyle.Render("Tab: Next field | Shift+Tab: Prev | Esc: Cancel | Enter: Save")
+		lines = append(lines, helpLine)
+	}
+
+	// Render content within panel
+	content := strings.Join(lines, "\n")
+
+	// Apply border and constraints
+	borderColor := lipgloss.Color("12")
+	if state.Editing {
+		// Highlight border in edit mode
+		borderColor = ColorAccent
+	}
+
+	panelStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(borderColor).
+		Padding(1).
+		MaxWidth(state.Width).
+		Height(state.Height - 2)
+
+	return panelStyle.Render(content)
+}
+
+// calculateDetailHeight returns 40% of terminal height, minimum 10 lines.
+func calculateDetailHeight(termHeight int) int {
+	height := termHeight * 40 / 100
+	if height < 10 {
+		return 10
+	}
+	return height
+}
+
+// truncateToWidth truncates a string to fit within maxWidth display width.
+func truncateToWidth(s string, maxWidth int) string {
+	if maxWidth <= 3 {
+		return "..."
+	}
+	w := runewidth.StringWidth(s)
+	if w <= maxWidth {
+		return s
+	}
+
+	// Truncate and add ellipsis
+	var result []rune
+	currentWidth := 0
+	for _, r := range s {
+		rw := runewidth.RuneWidth(r)
+		if currentWidth+rw+3 > maxWidth { // +3 for "..."
+			break
+		}
+		result = append(result, r)
+		currentWidth += rw
+	}
+	return string(result) + "..."
+}
+
+// --- Edit Mode Functions (Task 4.2) ---
+
+// EnterEditMode enters edit mode for the detail panel.
+// Only works when detail is visible and has an instance.
+// Returns a new KanbanDetailState with Editing=true and FocusedField=0.
+func EnterEditMode(state KanbanDetailState) KanbanDetailState {
+	if !state.Visible || state.Instance == nil {
+		return state
+	}
+
+	return KanbanDetailState{
+		Instance:     state.Instance,
+		Visible:      state.Visible,
+		Editing:      true,
+		FocusedField: 0,
+		Width:        state.Width,
+		Height:       state.Height,
+	}
+}
+
+// ExitEditMode exits edit mode, discarding any unsaved changes.
+// Returns a new KanbanDetailState with Editing=false.
+func ExitEditMode(state KanbanDetailState) KanbanDetailState {
+	return KanbanDetailState{
+		Instance:     state.Instance,
+		Visible:      state.Visible,
+		Editing:      false,
+		FocusedField: state.FocusedField,
+		Width:        state.Width,
+		Height:       state.Height,
+	}
+}
+
+// NextEditField moves focus to the next editable field (Tab).
+// Editable fields: Title(0), Description(1), AcceptCriteria(2), Column(3), AutoTrigger(4), YOLO(5).
+// Wraps from field 5 to 0.
+func NextEditField(state KanbanDetailState) KanbanDetailState {
+	if !state.Editing {
+		return state
+	}
+
+	nextField := (state.FocusedField + 1) % 6
+
+	return KanbanDetailState{
+		Instance:     state.Instance,
+		Visible:      state.Visible,
+		Editing:      state.Editing,
+		FocusedField: nextField,
+		Width:        state.Width,
+		Height:       state.Height,
+	}
+}
+
+// PrevEditField moves focus to the previous editable field (Shift+Tab).
+// Wraps from field 0 to 5.
+func PrevEditField(state KanbanDetailState) KanbanDetailState {
+	if !state.Editing {
+		return state
+	}
+
+	prevField := state.FocusedField - 1
+	if prevField < 0 {
+		prevField = 5
+	}
+
+	return KanbanDetailState{
+		Instance:     state.Instance,
+		Visible:      state.Visible,
+		Editing:      state.Editing,
+		FocusedField: prevField,
+		Width:        state.Width,
+		Height:       state.Height,
+	}
+}

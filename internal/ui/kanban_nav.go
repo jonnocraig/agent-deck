@@ -336,3 +336,411 @@ func (h *Home) helpKey(key, desc string) string {
 	descStyle := lipgloss.NewStyle().Foreground(ColorText)
 	return keyStyle.Render(key) + " " + descStyle.Render(desc)
 }
+
+// --- KanbanNav: 2D Cursor Navigation ---
+
+// KanbanNav encapsulates the kanban board navigation state
+type KanbanNav struct {
+	Col              int        // Current column index (0-5)
+	Row              int        // Current card index within column
+	Focus            FocusPanel // Which panel has focus
+	DetailOpen       bool       // Whether detail panel is visible
+	ColumnCardCounts [6]int     // Number of cards in each column
+	ScrollOffsets    [6]int     // Scroll offset for each column (first visible card index)
+	MoveMode         bool       // Whether in move mode
+	MoveTargetCol    int        // Target column for move
+	MoveSourceCol    int        // Source column (where card was)
+}
+
+// MoveLeft moves the cursor to the previous column (h key).
+// Clamps at column 0, skips empty columns, and clamps row to the new column's card count.
+// Only works when Focus == PanelBoard.
+func MoveLeft(nav KanbanNav) KanbanNav {
+	if nav.Focus != PanelBoard {
+		return nav
+	}
+
+	// Search left for a non-empty column
+	newCol := nav.Col
+	for newCol > 0 {
+		newCol--
+		if nav.ColumnCardCounts[newCol] > 0 {
+			// Clamp row to the new column's card count
+			newRow := nav.Row
+			if newRow >= nav.ColumnCardCounts[newCol] {
+				newRow = nav.ColumnCardCounts[newCol] - 1
+			}
+			return KanbanNav{
+				Col:              newCol,
+				Row:              newRow,
+				Focus:            nav.Focus,
+				DetailOpen:       nav.DetailOpen,
+				ColumnCardCounts: nav.ColumnCardCounts,
+				ScrollOffsets:    nav.ScrollOffsets,
+				MoveMode:         nav.MoveMode,
+				MoveTargetCol:    nav.MoveTargetCol,
+				MoveSourceCol:    nav.MoveSourceCol,
+			}
+		}
+	}
+
+	// No non-empty column found to the left
+	return nav
+}
+
+// MoveRight moves the cursor to the next column (l key).
+// Clamps at column 5, skips empty columns, and clamps row to the new column's card count.
+// Only works when Focus == PanelBoard.
+func MoveRight(nav KanbanNav) KanbanNav {
+	if nav.Focus != PanelBoard {
+		return nav
+	}
+
+	// Search right for a non-empty column
+	newCol := nav.Col
+	for newCol < 5 {
+		newCol++
+		if nav.ColumnCardCounts[newCol] > 0 {
+			// Clamp row to the new column's card count
+			newRow := nav.Row
+			if newRow >= nav.ColumnCardCounts[newCol] {
+				newRow = nav.ColumnCardCounts[newCol] - 1
+			}
+			return KanbanNav{
+				Col:              newCol,
+				Row:              newRow,
+				Focus:            nav.Focus,
+				DetailOpen:       nav.DetailOpen,
+				ColumnCardCounts: nav.ColumnCardCounts,
+				ScrollOffsets:    nav.ScrollOffsets,
+				MoveMode:         nav.MoveMode,
+				MoveTargetCol:    nav.MoveTargetCol,
+				MoveSourceCol:    nav.MoveSourceCol,
+			}
+		}
+	}
+
+	// No non-empty column found to the right
+	return nav
+}
+
+// MoveUp moves the cursor to the previous card (k key).
+// Clamps at row 0. Only works when Focus == PanelBoard.
+func MoveUp(nav KanbanNav) KanbanNav {
+	if nav.Focus != PanelBoard {
+		return nav
+	}
+
+	if nav.Row > 0 {
+		return KanbanNav{
+			Col:              nav.Col,
+			Row:              nav.Row - 1,
+			Focus:            nav.Focus,
+			DetailOpen:       nav.DetailOpen,
+			ColumnCardCounts: nav.ColumnCardCounts,
+			ScrollOffsets:    nav.ScrollOffsets,
+			MoveMode:         nav.MoveMode,
+			MoveTargetCol:    nav.MoveTargetCol,
+			MoveSourceCol:    nav.MoveSourceCol,
+		}
+	}
+
+	return nav
+}
+
+// MoveDown moves the cursor to the next card (j key).
+// Clamps at ColumnCardCounts[Col]-1. Only works when Focus == PanelBoard.
+func MoveDown(nav KanbanNav) KanbanNav {
+	if nav.Focus != PanelBoard {
+		return nav
+	}
+
+	maxRow := nav.ColumnCardCounts[nav.Col] - 1
+	if nav.Row < maxRow {
+		return KanbanNav{
+			Col:              nav.Col,
+			Row:              nav.Row + 1,
+			Focus:            nav.Focus,
+			DetailOpen:       nav.DetailOpen,
+			ColumnCardCounts: nav.ColumnCardCounts,
+			ScrollOffsets:    nav.ScrollOffsets,
+			MoveMode:         nav.MoveMode,
+			MoveTargetCol:    nav.MoveTargetCol,
+			MoveSourceCol:    nav.MoveSourceCol,
+		}
+	}
+
+	return nav
+}
+
+// CycleTabFocus cycles focus between panels with Tab key.
+// Order: Sidebar -> Board -> Detail (if open) -> Sidebar
+func CycleTabFocus(nav KanbanNav) KanbanNav {
+	var newFocus FocusPanel
+
+	switch nav.Focus {
+	case PanelSidebar:
+		newFocus = PanelBoard
+	case PanelBoard:
+		if nav.DetailOpen {
+			newFocus = PanelDetail
+		} else {
+			newFocus = PanelSidebar
+		}
+	case PanelDetail:
+		newFocus = PanelSidebar
+	default:
+		newFocus = PanelSidebar
+	}
+
+	return KanbanNav{
+		Col:              nav.Col,
+		Row:              nav.Row,
+		Focus:            newFocus,
+		DetailOpen:       nav.DetailOpen,
+		ColumnCardCounts: nav.ColumnCardCounts,
+		ScrollOffsets:    nav.ScrollOffsets,
+		MoveMode:         nav.MoveMode,
+		MoveTargetCol:    nav.MoveTargetCol,
+		MoveSourceCol:    nav.MoveSourceCol,
+	}
+}
+
+// JumpToColumn jumps to a specific column (1-6 keys).
+// Sets Col to target (0-5), resets Row to 0, and sets Focus to PanelBoard.
+// Only works when Focus == PanelBoard.
+func JumpToColumn(nav KanbanNav, col int) KanbanNav {
+	if nav.Focus != PanelBoard {
+		return nav
+	}
+
+	// Validate column range
+	if col < 0 || col > 5 {
+		return nav
+	}
+
+	return KanbanNav{
+		Col:              col,
+		Row:              0,
+		Focus:            PanelBoard,
+		DetailOpen:       nav.DetailOpen,
+		ColumnCardCounts: nav.ColumnCardCounts,
+		ScrollOffsets:    nav.ScrollOffsets,
+		MoveMode:         nav.MoveMode,
+		MoveTargetCol:    nav.MoveTargetCol,
+		MoveSourceCol:    nav.MoveSourceCol,
+	}
+}
+
+// ToggleDetail toggles the detail panel (Space key).
+// If closing and Focus == PanelDetail, moves focus to PanelBoard.
+func ToggleDetail(nav KanbanNav) KanbanNav {
+	newDetailOpen := !nav.DetailOpen
+	newFocus := nav.Focus
+
+	// If closing detail and focus is on detail, move focus to board
+	if !newDetailOpen && nav.Focus == PanelDetail {
+		newFocus = PanelBoard
+	}
+
+	return KanbanNav{
+		Col:              nav.Col,
+		Row:              nav.Row,
+		Focus:            newFocus,
+		DetailOpen:       newDetailOpen,
+		ColumnCardCounts: nav.ColumnCardCounts,
+		ScrollOffsets:    nav.ScrollOffsets,
+		MoveMode:         nav.MoveMode,
+		MoveTargetCol:    nav.MoveTargetCol,
+		MoveSourceCol:    nav.MoveSourceCol,
+	}
+}
+
+// --- Move Mode Functions ---
+
+// EnterMoveMode enters move mode, setting the target to the current column.
+// Only works when Focus == PanelBoard.
+func EnterMoveMode(nav KanbanNav) KanbanNav {
+	if nav.Focus != PanelBoard {
+		return nav
+	}
+
+	return KanbanNav{
+		Col:              nav.Col,
+		Row:              nav.Row,
+		Focus:            nav.Focus,
+		DetailOpen:       nav.DetailOpen,
+		ColumnCardCounts: nav.ColumnCardCounts,
+		ScrollOffsets:    nav.ScrollOffsets,
+		MoveMode:         true,
+		MoveTargetCol:    nav.Col,
+		MoveSourceCol:    nav.Col,
+	}
+}
+
+// MoveModeLeft moves the target column left in move mode.
+// Clamps at column 0.
+func MoveModeLeft(nav KanbanNav) KanbanNav {
+	if !nav.MoveMode {
+		return nav
+	}
+
+	newTargetCol := nav.MoveTargetCol
+	if newTargetCol > 0 {
+		newTargetCol--
+	}
+
+	return KanbanNav{
+		Col:              nav.Col,
+		Row:              nav.Row,
+		Focus:            nav.Focus,
+		DetailOpen:       nav.DetailOpen,
+		ColumnCardCounts: nav.ColumnCardCounts,
+		ScrollOffsets:    nav.ScrollOffsets,
+		MoveMode:         nav.MoveMode,
+		MoveTargetCol:    newTargetCol,
+		MoveSourceCol:    nav.MoveSourceCol,
+	}
+}
+
+// MoveModeRight moves the target column right in move mode.
+// Clamps at column 5.
+func MoveModeRight(nav KanbanNav) KanbanNav {
+	if !nav.MoveMode {
+		return nav
+	}
+
+	newTargetCol := nav.MoveTargetCol
+	if newTargetCol < 5 {
+		newTargetCol++
+	}
+
+	return KanbanNav{
+		Col:              nav.Col,
+		Row:              nav.Row,
+		Focus:            nav.Focus,
+		DetailOpen:       nav.DetailOpen,
+		ColumnCardCounts: nav.ColumnCardCounts,
+		ScrollOffsets:    nav.ScrollOffsets,
+		MoveMode:         nav.MoveMode,
+		MoveTargetCol:    newTargetCol,
+		MoveSourceCol:    nav.MoveSourceCol,
+	}
+}
+
+// ExitMoveMode exits move mode without moving.
+func ExitMoveMode(nav KanbanNav) KanbanNav {
+	return KanbanNav{
+		Col:              nav.Col,
+		Row:              nav.Row,
+		Focus:            nav.Focus,
+		DetailOpen:       nav.DetailOpen,
+		ColumnCardCounts: nav.ColumnCardCounts,
+		ScrollOffsets:    nav.ScrollOffsets,
+		MoveMode:         false,
+		MoveTargetCol:    0,
+		MoveSourceCol:    0,
+	}
+}
+
+// ConfirmMove returns the confirmed move details (source, target) and exits move mode.
+// Returns (nav, sourceCol, targetCol).
+func ConfirmMove(nav KanbanNav) (KanbanNav, int, int) {
+	sourceCol := nav.MoveSourceCol
+	targetCol := nav.MoveTargetCol
+
+	newNav := KanbanNav{
+		Col:              nav.Col,
+		Row:              nav.Row,
+		Focus:            nav.Focus,
+		DetailOpen:       nav.DetailOpen,
+		ColumnCardCounts: nav.ColumnCardCounts,
+		ScrollOffsets:    nav.ScrollOffsets,
+		MoveMode:         false,
+		MoveTargetCol:    0,
+		MoveSourceCol:    0,
+	}
+
+	return newNav, sourceCol, targetCol
+}
+
+// --- Scroll Helpers ---
+
+// CalculateVisibleCardRange returns the start/end indices of visible cards for a column.
+// Parameters:
+//   - totalCards: total number of cards in the column
+//   - scrollOffset: index of the first card to display (scroll position)
+//   - availableHeight: height in lines available for cards
+//   - cardHeight: height of a single card in lines (typically 1 for compact cards)
+//
+// Returns (start, end) where start is inclusive and end is exclusive.
+// If no cards can fit, returns (scrollOffset, scrollOffset).
+func CalculateVisibleCardRange(totalCards, scrollOffset, availableHeight, cardHeight int) (start, end int) {
+	if availableHeight <= 0 || cardHeight <= 0 {
+		return scrollOffset, scrollOffset
+	}
+
+	// Calculate how many cards can fit in available height
+	visibleCards := availableHeight / cardHeight
+	if visibleCards <= 0 {
+		return scrollOffset, scrollOffset
+	}
+
+	start = scrollOffset
+	end = scrollOffset + visibleCards
+
+	// Clamp to total cards
+	if end > totalCards {
+		end = totalCards
+	}
+
+	return start, end
+}
+
+// AutoScrollToSelection adjusts scroll offset to keep the selected row visible.
+// Returns a new KanbanNav with updated ScrollOffsets for the selected column.
+// Only modifies the scroll offset for the currently selected column.
+func AutoScrollToSelection(nav KanbanNav, availableHeight, cardHeight int) KanbanNav {
+	if availableHeight <= 0 || cardHeight <= 0 {
+		return nav
+	}
+
+	col := nav.Col
+	row := nav.Row
+	scrollOffset := nav.ScrollOffsets[col]
+	totalCards := nav.ColumnCardCounts[col]
+
+	// Calculate visible range
+	start, end := CalculateVisibleCardRange(totalCards, scrollOffset, availableHeight, cardHeight)
+
+	// Check if selected row is visible
+	if row < start {
+		// Selected row is above viewport, scroll up to show it
+		scrollOffset = row
+	} else if row >= end {
+		// Selected row is below viewport, scroll down to show it
+		// Position selected row at the bottom of the viewport
+		visibleCards := availableHeight / cardHeight
+		scrollOffset = row - visibleCards + 1
+		if scrollOffset < 0 {
+			scrollOffset = 0
+		}
+	}
+	// else: row is in view, no scroll needed
+
+	// Create new ScrollOffsets array with updated value
+	newScrollOffsets := nav.ScrollOffsets
+	newScrollOffsets[col] = scrollOffset
+
+	return KanbanNav{
+		Col:              nav.Col,
+		Row:              nav.Row,
+		Focus:            nav.Focus,
+		DetailOpen:       nav.DetailOpen,
+		ColumnCardCounts: nav.ColumnCardCounts,
+		ScrollOffsets:    newScrollOffsets,
+		MoveMode:         nav.MoveMode,
+		MoveTargetCol:    nav.MoveTargetCol,
+		MoveSourceCol:    nav.MoveSourceCol,
+	}
+}

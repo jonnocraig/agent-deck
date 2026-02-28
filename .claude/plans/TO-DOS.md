@@ -12,13 +12,24 @@
   - [x] **Phase 0: Refactor** — home.go decomposed into 7 kanban_*.go files (b80441d)
   - [x] **Phase 1: Data Layer** — types, schema v2, CRUD, messages, sort order (9b7ea91)
   - [x] **Phase 2: Board UI** — KanbanBoard, KanbanCard, KanbanSidebar rendering (146dc92)
-  - [ ] **Phase 3: Navigation** — KanbanNav 2D cursor, Tab focus, column jump, scroll (**NEXT**)
-  - [ ] **Phase 4: Detail Panel** — KanbanDetail editable fields, Space toggle, edit mode
-  - [ ] **Phase 5: Transitions** — TransitionEngine, skill triggers, 3-tier config, rollback
+  - [x] **Phase 3: Navigation** — KanbanNav 2D cursor, scroll, n/d/m card interactions (uncommitted)
+  - [x] **Phase 4: Detail Panel** — KanbanDetail panel, edit mode (uncommitted)
+  - [ ] **Phase 5: Transitions** — TransitionEngine, skill triggers, 3-tier config, rollback (**NEXT**)
   - [ ] **Phase 6: Conductor** — YOLO mode, zen consensus gates, conductor lifecycle
   - [ ] **Phase 7: Skills** — 4 new skills (backlog, review, done, self-evolve)
 
-## Completed This Session (2026-02-28 — Wave 3 Implementation)
+## Completed This Session (2026-02-28 — Wave 4 Implementation)
+
+- [x] Task 3.1: KanbanNav 2D cursor — KanbanNav struct, 7 immutable methods, 21 tests
+- [x] Task 3.2: Vertical scroll within columns — scroll offset tracking, auto-scroll
+- [x] Task 3.3: n (new session) and d (delete) in board — create/delete with confirmation
+- [x] Task 3.4: m (move card) interaction flow — move mode with column picker overlay, 10 tests
+- [x] Task 4.1: KanbanDetail panel — KanbanDetailState, renderKanbanDetail, 13 tests
+- [x] Task 4.2: Edit mode for detail panel — field cycling, text input
+- [x] Wave 4 quality gates: build pass, vet pass, test-suite pass (16/16 packages)
+- [x] Wave 4 NOT YET COMMITTED — needs commit
+
+## Completed Previous Session (2026-02-28 — Wave 3 Implementation)
 
 - [x] Task 2.1: KanbanBoard 6-column layout, responsive breakpoints, empty state (6 tests)
 - [x] Task 2.2: KanbanCard compact rendering, status icons, YOLO badge, truncation (10 tests)

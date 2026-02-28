@@ -688,7 +688,8 @@ var kanbanColumnsOrdered = []session.KanbanColumn{
 // renderKanbanBoard renders the full kanban board with 6 columns
 // Groups instances by KanbanColumn, sorts by KanbanSortOrder, and renders columns side-by-side
 // In narrow mode (<80 cols), shows only 3 columns with scroll indicators
-func renderKanbanBoard(instances []*session.Instance, width, height, selectedCol, selectedRow int, sidebarWidth int) string {
+// scrollOffsets: array of scroll positions (first visible card index) for each column
+func renderKanbanBoard(instances []*session.Instance, width, height, selectedCol, selectedRow int, sidebarWidth int, moveMode bool, moveTargetCol int, scrollOffsets [6]int) string {
 	// Handle empty board
 	if len(instances) == 0 {
 		return renderEmptyKanbanBoard(width, height)
@@ -742,17 +743,40 @@ func renderKanbanBoard(instances []*session.Instance, width, height, selectedCol
 	// Render each column
 	var columns []string
 	for _, col := range visibleCols {
-		cards := columnCards[col]
-		colSelected := (col.Index() == selectedCol)
+		allCards := columnCards[col]
+		colIdx := col.Index()
+		colSelected := (colIdx == selectedCol)
 		colName := kanbanColumnAbbrev[col]
-		count := len(cards)
+		totalCount := len(allCards)
+		isMoveTarget := moveMode && (colIdx == moveTargetCol)
 
-		// Render column header (1 line)
-		header := renderKanbanColumnHeader(colName, count, colWidth, colSelected)
+		// Get scroll offset for this column
+		scrollOffset := scrollOffsets[colIdx]
 
-		// Render column content (height - 1 for header)
+		// Calculate visible card range (height - 1 for header)
 		contentHeight := height - 1
-		content := renderKanbanColumn(cards, colWidth, contentHeight, selectedRow, colSelected)
+		cardHeight := 1 // Compact cards are 1 line each
+		start, end := CalculateVisibleCardRange(totalCount, scrollOffset, contentHeight, cardHeight)
+
+		// Slice cards to visible range
+		visibleCards := allCards
+		if start < len(allCards) && end <= len(allCards) {
+			visibleCards = allCards[start:end]
+		} else if start < len(allCards) {
+			visibleCards = allCards[start:]
+		}
+
+		// Calculate indicators
+		showAbove := start > 0
+		showBelow := end < totalCount
+		aboveCount := start
+		belowCount := totalCount - end
+
+		// Render column header (1 line) - shows total count, not visible count
+		header := renderKanbanColumnHeader(colName, totalCount, colWidth, colSelected, isMoveTarget)
+
+		// Render column content with visible cards
+		content := renderKanbanColumnWithScroll(visibleCards, colWidth, contentHeight, selectedRow-start, colSelected, showAbove, showBelow, aboveCount, belowCount)
 
 		// Combine header + content
 		columnStr := header + "\n" + content
@@ -815,12 +839,20 @@ func getVisibleColumns(selectedCol, numVisible int) ([]session.KanbanColumn, boo
 }
 
 // renderKanbanColumnHeader renders a column header with abbreviated name and count
-// Format: "BL(2)" - selected columns get accent color highlight
-func renderKanbanColumnHeader(name string, count int, width int, selected bool) string {
+// Format: "BL(2)" - selected columns get accent color highlight, move target gets special highlight
+func renderKanbanColumnHeader(name string, count int, width int, selected bool, moveTarget bool) string {
 	text := fmt.Sprintf("%s(%d)", name, count)
 
 	var style lipgloss.Style
-	if selected {
+	if moveTarget {
+		// Move target: yellow background to indicate target
+		style = lipgloss.NewStyle().
+			Foreground(ColorBg).
+			Background(ColorYellow).
+			Bold(true).
+			Width(width).
+			Align(lipgloss.Center)
+	} else if selected {
 		style = lipgloss.NewStyle().
 			Foreground(ColorBg).
 			Background(ColorAccent).
@@ -862,6 +894,80 @@ func renderKanbanColumn(cards []*session.Instance, width, height int, selectedRo
 
 	// Pad to exact height
 	return ensureExactHeight(b.String(), height)
+}
+
+// renderKanbanColumnWithScroll renders a column's content with scroll indicators
+// showAbove/showBelow: whether there are cards above/below the visible range
+// aboveCount/belowCount: how many cards are hidden above/below
+func renderKanbanColumnWithScroll(cards []*session.Instance, width, height int, selectedRow int, colSelected bool, showAbove, showBelow bool, aboveCount, belowCount int) string {
+	if len(cards) == 0 {
+		// Empty column - check if we need indicators despite no visible cards
+		emptyStyle := lipgloss.NewStyle().
+			Foreground(ColorComment).
+			Align(lipgloss.Center).
+			Width(width)
+
+		var lines []string
+
+		// Add top indicator if cards are above
+		if showAbove {
+			indicatorStyle := lipgloss.NewStyle().
+				Foreground(ColorComment).
+				Align(lipgloss.Center).
+				Width(width)
+			lines = append(lines, indicatorStyle.Render(fmt.Sprintf("↑ %d above", aboveCount)))
+		}
+
+		// Add bottom indicator if cards are below
+		if showBelow {
+			// Pad with empty lines if needed
+			for len(lines) < height-1 {
+				lines = append(lines, emptyStyle.Render(""))
+			}
+			indicatorStyle := lipgloss.NewStyle().
+				Foreground(ColorComment).
+				Align(lipgloss.Center).
+				Width(width)
+			lines = append(lines, indicatorStyle.Render(fmt.Sprintf("↓ %d below", belowCount)))
+		}
+
+		// Fill remaining height
+		for len(lines) < height {
+			lines = append(lines, emptyStyle.Render(""))
+		}
+
+		return ensureExactHeight(strings.Join(lines, "\n"), height)
+	}
+
+	var lines []string
+
+	// Add top indicator if there are cards scrolled above
+	if showAbove {
+		indicatorStyle := lipgloss.NewStyle().
+			Foreground(ColorComment).
+			Align(lipgloss.Center).
+			Width(width)
+		lines = append(lines, indicatorStyle.Render(fmt.Sprintf("↑ %d above", aboveCount)))
+	}
+
+	// Render visible cards
+	for idx, card := range cards {
+		cardSelected := colSelected && (idx == selectedRow)
+		cardStr := renderKanbanCard(card, width, cardSelected)
+		lines = append(lines, cardStr)
+	}
+
+	// Add bottom indicator if there are cards scrolled below
+	if showBelow {
+		indicatorStyle := lipgloss.NewStyle().
+			Foreground(ColorComment).
+			Align(lipgloss.Center).
+			Width(width)
+		lines = append(lines, indicatorStyle.Render(fmt.Sprintf("↓ %d below", belowCount)))
+	}
+
+	// Join and pad to exact height
+	return ensureExactHeight(strings.Join(lines, "\n"), height)
 }
 
 // addScrollIndicators adds ◀ ▶ indicators to show there are more columns

@@ -1189,3 +1189,108 @@ func TestHomeKanbanBoardNavigation(t *testing.T) {
 		t.Errorf("h at col 0 should stay 0, got %d", h.kanbanSelectedCol)
 	}
 }
+
+func TestKanbanKey_N_CreatesSession(t *testing.T) {
+	home := NewHome()
+	home.width = 120
+	home.height = 40
+	home.initialLoading = false
+	home.kanbanMode = true
+	home.kanbanFocus = PanelBoard
+	home.kanbanSelectedCol = 1 // Design column
+	home.rebuildKanbanSidebar()
+
+	// Press 'n' to create a new session
+	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}}
+	_, cmd := home.Update(msg)
+
+	// Should return a command (session creation is async)
+	if cmd == nil {
+		t.Error("pressing n in kanban mode should trigger session creation")
+	}
+}
+
+func TestKanbanKey_N_NotBoard(t *testing.T) {
+	home := NewHome()
+	home.width = 120
+	home.height = 40
+	home.initialLoading = false
+	home.kanbanMode = true
+	home.kanbanFocus = PanelSidebar // Focus on sidebar, not board
+	home.rebuildKanbanSidebar()
+
+	initialInstCount := len(home.instances)
+
+	// Press 'n' while focus is on sidebar
+	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}}
+	model, cmd := home.Update(msg)
+	h := model.(*Home)
+
+	// Should not create a session (n is only active when focus is on board)
+	if cmd != nil {
+		t.Error("pressing n when focus != PanelBoard should not trigger session creation")
+	}
+	if len(h.instances) != initialInstCount {
+		t.Error("session count should not change when n pressed outside board focus")
+	}
+}
+
+func TestKanbanKey_D_DeletesSession(t *testing.T) {
+	home := NewHome()
+	home.width = 120
+	home.height = 40
+	home.initialLoading = false
+	home.kanbanMode = true
+	home.kanbanFocus = PanelBoard
+	home.kanbanSelectedCol = 0
+	home.kanbanSelectedRow = 0
+
+	// Create a session in Backlog column
+	col := session.KanbanBacklog
+	inst := session.NewInstance("test-session", "/tmp/project")
+	inst.KanbanColumn = &col
+	home.instancesMu.Lock()
+	home.instances = []*session.Instance{inst}
+	home.instanceByID[inst.ID] = inst
+	home.instancesMu.Unlock()
+	home.groupTree = session.NewGroupTree(home.instances)
+	home.rebuildKanbanSidebar()
+
+	// Press 'd' to delete the session
+	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}}
+	model, _ := home.Update(msg)
+	h := model.(*Home)
+
+	// Should show confirmation dialog
+	if !h.confirmDialog.IsVisible() {
+		t.Error("pressing d should show confirmation dialog")
+	}
+	if h.confirmDialog.GetConfirmType() != ConfirmDeleteSession {
+		t.Errorf("confirm type = %v, want ConfirmDeleteSession", h.confirmDialog.GetConfirmType())
+	}
+	if h.confirmDialog.GetTargetID() != inst.ID {
+		t.Errorf("target ID = %s, want %s", h.confirmDialog.GetTargetID(), inst.ID)
+	}
+}
+
+func TestKanbanKey_D_EmptyColumn(t *testing.T) {
+	home := NewHome()
+	home.width = 120
+	home.height = 40
+	home.initialLoading = false
+	home.kanbanMode = true
+	home.kanbanFocus = PanelBoard
+	home.kanbanSelectedCol = 0 // Empty Backlog column
+	home.kanbanSelectedRow = 0
+	home.rebuildKanbanSidebar()
+
+	// No sessions in kanban, press 'd'
+	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}}
+	model, _ := home.Update(msg)
+	h := model.(*Home)
+
+	// Should not show confirmation dialog (no card to delete)
+	if h.confirmDialog.IsVisible() {
+		t.Error("pressing d in empty column should not show confirmation dialog")
+	}
+}

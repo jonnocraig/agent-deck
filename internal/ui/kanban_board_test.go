@@ -29,7 +29,8 @@ func TestRenderKanbanBoard_120Cols(t *testing.T) {
 	selectedRow := 0
 	sidebarWidth := 30
 
-	result := renderKanbanBoard(instances, width, height, selectedCol, selectedRow, sidebarWidth)
+	var scrollOffsets [6]int
+	result := renderKanbanBoard(instances, width, height, selectedCol, selectedRow, sidebarWidth, false, 0, scrollOffsets)
 
 	// Verify result has exactly height lines
 	lines := strings.Split(result, "\n")
@@ -57,7 +58,8 @@ func TestRenderKanbanBoard_160Cols(t *testing.T) {
 	selectedRow := 0
 	sidebarWidth := 40
 
-	result := renderKanbanBoard(instances, width, height, selectedCol, selectedRow, sidebarWidth)
+	var scrollOffsets [6]int
+	result := renderKanbanBoard(instances, width, height, selectedCol, selectedRow, sidebarWidth, false, 0, scrollOffsets)
 
 	// Verify result has exactly height lines
 	lines := strings.Split(result, "\n")
@@ -87,7 +89,8 @@ func TestRenderKanbanBoard_80Cols(t *testing.T) {
 	selectedRow := 0
 	sidebarWidth := 0 // Sidebar hidden in narrow mode
 
-	result := renderKanbanBoard(instances, width, height, selectedCol, selectedRow, sidebarWidth)
+	var scrollOffsets [6]int
+	result := renderKanbanBoard(instances, width, height, selectedCol, selectedRow, sidebarWidth, false, 0, scrollOffsets)
 
 	// Verify result has exactly height lines
 	lines := strings.Split(result, "\n")
@@ -113,7 +116,8 @@ func TestRenderKanbanBoard_ColumnHeaders(t *testing.T) {
 	height := 10
 
 	// Test with column 0 (Backlog) selected
-	result := renderKanbanBoard(instances, width, height, 0, 0, 30)
+	var scrollOffsets [6]int
+	result := renderKanbanBoard(instances, width, height, 0, 0, 30, false, 0, scrollOffsets)
 	assert.Contains(t, result, "BL(2)", "should show Backlog count")
 	assert.Contains(t, result, "DE(1)", "should show Design count")
 	assert.Contains(t, result, "PL(0)", "should show Plan count")
@@ -129,7 +133,8 @@ func TestRenderKanbanBoard_EmptyBoard(t *testing.T) {
 	selectedRow := 0
 	sidebarWidth := 30
 
-	result := renderKanbanBoard(instances, width, height, selectedCol, selectedRow, sidebarWidth)
+	var scrollOffsets [6]int
+	result := renderKanbanBoard(instances, width, height, selectedCol, selectedRow, sidebarWidth, false, 0, scrollOffsets)
 
 	// Should show empty state hint
 	resultStr := strings.ToLower(result)
@@ -155,7 +160,8 @@ func TestRenderKanbanBoard_CardsInColumns(t *testing.T) {
 	selectedRow := 0
 	sidebarWidth := 30
 
-	result := renderKanbanBoard(instances, width, height, selectedCol, selectedRow, sidebarWidth)
+	var scrollOffsets [6]int
+	result := renderKanbanBoard(instances, width, height, selectedCol, selectedRow, sidebarWidth, false, 0, scrollOffsets)
 
 	// Find all occurrences of Task names
 	lines := strings.Split(result, "\n")
@@ -215,7 +221,7 @@ func TestRenderKanbanColumnHeader(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := renderKanbanColumnHeader(tt.colName, tt.count, tt.width, tt.selected)
+			result := renderKanbanColumnHeader(tt.colName, tt.count, tt.width, tt.selected, false)
 			// Strip ANSI codes for content checking
 			stripped := lipgloss.NewStyle().Render(result)
 			assert.Contains(t, stripped, tt.want, "should contain expected header text")

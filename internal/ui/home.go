@@ -226,11 +226,15 @@ type Home struct {
 	watcherWarning string
 
 	// Kanban mode state
-	kanbanMode         bool                // True when displaying the kanban board view
-	kanbanFocus        FocusPanel          // Which kanban panel has focus (sidebar/board/detail)
-	kanbanSelectedCol  int                 // Currently selected column index (0-5)
-	kanbanSelectedRow  int                 // Currently selected card index within column
-	kanbanSidebarState KanbanSidebarState  // Sidebar state (groups, selection, focus)
+	kanbanMode          bool                // True when displaying the kanban board view
+	kanbanFocus         FocusPanel          // Which kanban panel has focus (sidebar/board/detail)
+	kanbanSelectedCol   int                 // Currently selected column index (0-5)
+	kanbanSelectedRow   int                 // Currently selected card index within column
+	kanbanScrollOffsets [6]int              // Scroll offset (first visible card index) for each column
+	kanbanSidebarState  KanbanSidebarState  // Sidebar state (groups, selection, focus)
+	kanbanMoveMode      bool                // True when in move mode
+	kanbanMoveTarget    int                 // Target column index for move (0-5)
+	kanbanMoveSource    int                 // Source column index for move (0-5)
 
 	// Update notification (async check on startup)
 	updateInfo *update.UpdateInfo
@@ -5291,6 +5295,88 @@ func (h *Home) quickCreateSession() tea.Cmd {
 	)
 }
 
+// createKanbanSession creates a session in the specified kanban column with smart defaults.
+// Similar to quickCreateSession but assigns the session to a kanban column.
+func (h *Home) createKanbanSession(column session.KanbanColumn) tea.Cmd {
+	groupPath := session.DefaultGroupPath
+	projectPath := ""
+	tool := session.GetDefaultTool()
+	if tool == "" {
+		tool = "claude"
+	}
+	command := tool
+	var toolOptionsJSON json.RawMessage
+
+	// Try to inherit settings from the most recent session in the current kanban view
+	kanbanInstances := h.getKanbanInstances()
+	var mostRecent *session.Instance
+	for _, inst := range kanbanInstances {
+		if mostRecent == nil || inst.CreatedAt.After(mostRecent.CreatedAt) {
+			mostRecent = inst
+		}
+	}
+	if mostRecent != nil {
+		projectPath = mostRecent.ProjectPath
+		tool = mostRecent.Tool
+		command = mostRecent.Command
+		groupPath = mostRecent.GroupPath
+		if len(mostRecent.ToolOptionsJSON) > 0 {
+			toolOptionsJSON = mostRecent.ToolOptionsJSON
+		}
+	}
+
+	// Fallback for path
+	if projectPath == "" {
+		var err error
+		projectPath, err = os.Getwd()
+		if err != nil {
+			return func() tea.Msg {
+				return sessionCreatedMsg{err: fmt.Errorf("cannot determine project path: %w", err)}
+			}
+		}
+	}
+
+	// Generate unique name
+	h.instancesMu.RLock()
+	name := session.GenerateUniqueSessionName(h.instances, groupPath)
+	h.instancesMu.RUnlock()
+
+	return func() tea.Msg {
+		// Check tmux availability before creating session
+		if err := tmux.IsTmuxAvailable(); err != nil {
+			return sessionCreatedMsg{err: fmt.Errorf("cannot create session: %w", err)}
+		}
+
+		var inst *session.Instance
+		if groupPath != "" {
+			inst = session.NewInstanceWithGroupAndTool(name, projectPath, groupPath, tool)
+		} else {
+			inst = session.NewInstanceWithTool(name, projectPath, tool)
+		}
+		inst.Command = command
+
+		// Apply generic tool options
+		if len(toolOptionsJSON) > 0 {
+			inst.ToolOptionsJSON = toolOptionsJSON
+		}
+
+		// Assign to kanban column
+		inst.KanbanColumn = &column
+
+		uiLog.Info("kanban_session_create_starting",
+			slog.String("tool", inst.Tool),
+			slog.String("path", inst.ProjectPath),
+			slog.String("column", string(column)),
+		)
+		if err := inst.Start(); err != nil {
+			uiLog.Error("kanban_session_create_failed", slog.String("error", err.Error()))
+			return sessionCreatedMsg{err: err}
+		}
+		uiLog.Info("kanban_session_create_succeeded", slog.String("id", inst.ID))
+		return sessionCreatedMsg{instance: inst}
+	}
+}
+
 // mostRecentPathInGroup returns the project path of the most recently created
 // session in the given group, or empty string if no sessions exist.
 func (h *Home) mostRecentPathInGroup(groupPath string) string {
@@ -6117,6 +6203,32 @@ func (h *Home) getKanbanInstances() []*session.Instance {
 	return result
 }
 
+// getKanbanInstancesLocked returns instances for the currently selected kanban group.
+// Assumes caller already holds h.instancesMu.RLock.
+func (h *Home) getKanbanInstancesLocked() []*session.Instance {
+	if len(h.kanbanSidebarState.Groups) == 0 {
+		return nil
+	}
+
+	selected := h.kanbanSidebarState.Groups[h.kanbanSidebarState.SelectedIdx]
+
+	// "All Sessions" shows everything
+	if selected.IsAllSessions {
+		result := make([]*session.Instance, len(h.instances))
+		copy(result, h.instances)
+		return result
+	}
+
+	// Filter to group
+	var result []*session.Instance
+	for _, inst := range h.instances {
+		if inst.GroupPath == selected.Path {
+			result = append(result, inst)
+		}
+	}
+	return result
+}
+
 // renderKanbanLayout renders the full kanban layout: sidebar | board
 func (h *Home) renderKanbanLayout(contentHeight int) string {
 	// Update sidebar height
@@ -6137,7 +6249,7 @@ func (h *Home) renderKanbanLayout(contentHeight int) string {
 	// Render board
 	instances := h.getKanbanInstances()
 	boardWidth := h.width - kanbanSidebarWidth - 1 // -1 for separator
-	board := renderKanbanBoard(instances, boardWidth, contentHeight, h.kanbanSelectedCol, h.kanbanSelectedRow, 0)
+	board := renderKanbanBoard(instances, boardWidth, contentHeight, h.kanbanSelectedCol, h.kanbanSelectedRow, 0, h.kanbanMoveMode, h.kanbanMoveTarget, h.kanbanScrollOffsets)
 
 	// Join horizontally
 	result := lipgloss.JoinHorizontal(lipgloss.Top, sidebar, separator, board)
@@ -6149,6 +6261,79 @@ func (h *Home) renderKanbanLayout(contentHeight int) string {
 // handleKanbanKey handles keyboard input when in kanban mode
 func (h *Home) handleKanbanKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
+
+	// Handle move mode keys
+	if h.kanbanMoveMode && h.kanbanFocus == PanelBoard {
+		switch key {
+		case "h", "left":
+			if h.kanbanMoveTarget > 0 {
+				h.kanbanMoveTarget--
+			}
+			return h, nil
+		case "l", "right":
+			if h.kanbanMoveTarget < 5 {
+				h.kanbanMoveTarget++
+			}
+			return h, nil
+		case "enter":
+			// Confirm move
+			sourceCol := h.kanbanMoveSource
+			targetCol := h.kanbanMoveTarget
+
+			// Exit move mode
+			h.kanbanMoveMode = false
+			h.kanbanMoveTarget = 0
+			h.kanbanMoveSource = 0
+
+			// If same column, no-op
+			if sourceCol == targetCol {
+				return h, nil
+			}
+
+			// Get the card being moved
+			instances := h.getKanbanInstances()
+			card := h.findKanbanCard(instances)
+			if card == nil {
+				return h, nil
+			}
+
+			fromCol := kanbanColumnsOrdered[sourceCol]
+			toCol := kanbanColumnsOrdered[targetCol]
+
+			// If moving backward, show confirmation using ShowConfirmDialogMsg
+			if targetCol < sourceCol {
+				return h, func() tea.Msg {
+					return ShowConfirmDialogMsg{
+						Title: "Confirm Move Backward",
+						Body:  "Move " + card.Title + " from " + fromCol.String() + " to " + toCol.String() + "?",
+						OnConfirm: MoveConfirmedMsg{
+							SessionID:  card.ID,
+							FromColumn: fromCol,
+							ToColumn:   toCol,
+						},
+					}
+				}
+			}
+
+			// Move forward: send message directly
+			return h, func() tea.Msg {
+				return MoveConfirmedMsg{
+					SessionID:  card.ID,
+					FromColumn: fromCol,
+					ToColumn:   toCol,
+				}
+			}
+		case "esc":
+			// Cancel move mode
+			h.kanbanMoveMode = false
+			h.kanbanMoveTarget = 0
+			h.kanbanMoveSource = 0
+			return h, nil
+		default:
+			// Ignore other keys in move mode
+			return h, nil
+		}
+	}
 
 	switch key {
 	case "q", "ctrl+c":
@@ -6193,7 +6378,60 @@ func (h *Home) handleKanbanKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		h.helpOverlay.Show()
 		h.helpOverlay.SetSize(h.width, h.height)
 		return h, nil
+
+	case "m":
+		// Enter move mode (board only, not already in move mode)
+		if h.kanbanFocus == PanelBoard && !h.kanbanMoveMode {
+			instances := h.getKanbanInstances()
+			card := h.findKanbanCard(instances)
+			if card != nil {
+				h.kanbanMoveMode = true
+				h.kanbanMoveTarget = h.kanbanSelectedCol
+				h.kanbanMoveSource = h.kanbanSelectedCol
+			}
+		}
+		return h, nil
+
+	case "n":
+		// Create new session in current column (board only)
+		if h.kanbanFocus == PanelBoard {
+			if h.kanbanSelectedCol < 0 || h.kanbanSelectedCol >= len(kanbanColumnsOrdered) {
+				return h, nil
+			}
+			col := kanbanColumnsOrdered[h.kanbanSelectedCol]
+			return h, h.createKanbanSession(col)
+		}
+		return h, nil
+
+	case "d":
+		// Delete selected session (board only)
+		if h.kanbanFocus == PanelBoard {
+			instances := h.getKanbanInstances()
+			card := h.findKanbanCard(instances)
+			if card != nil {
+				h.confirmDialog.ShowDeleteSession(card.ID, card.Title, card.IsSandboxed())
+			}
+		}
+		return h, nil
+
+	case "e":
+		// Enter edit mode when detail panel has focus and is visible
+		// TODO: Wire this up when KanbanDetailState is integrated into Home
+		// For now, this is a placeholder for Task 4.2 completion
+		if h.kanbanFocus == PanelDetail {
+			// h.kanbanDetailState = EnterEditMode(h.kanbanDetailState)
+			return h, nil
+		}
+		return h, nil
 	}
+
+	// TODO (Task 4.2): Edit mode key handling when kanbanDetailState.Editing == true
+	// When in edit mode:
+	//   - Tab: h.kanbanDetailState = NextEditField(h.kanbanDetailState)
+	//   - Shift+Tab: h.kanbanDetailState = PrevEditField(h.kanbanDetailState)
+	//   - Esc: h.kanbanDetailState = ExitEditMode(h.kanbanDetailState)
+	//   - Enter: Save the focused field and stay in edit mode
+	//   - All other keys: no-op (prevent board navigation)
 
 	// Route navigation keys based on focus
 	if h.kanbanFocus == PanelSidebar {
@@ -6221,6 +6459,9 @@ func (h *Home) handleKanbanKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	// TODO: Auto-scroll to keep selection visible after navigation
+	// h.autoScrollKanbanSelection()
+
 	return h, nil
 }
 
@@ -6246,6 +6487,46 @@ func (h *Home) findKanbanCard(instances []*session.Instance) *session.Instance {
 		return cards[h.kanbanSelectedRow]
 	}
 	return nil
+}
+
+// autoScrollKanbanSelection updates scroll offsets to keep the selected card visible
+func (h *Home) autoScrollKanbanSelection() {
+	// Get column card counts
+	var columnCardCounts [6]int
+	instances := h.getKanbanInstances()
+	for _, inst := range instances {
+		if inst.KanbanColumn != nil {
+			colIdx := inst.KanbanColumn.Index()
+			if colIdx >= 0 && colIdx < 6 {
+				columnCardCounts[colIdx]++
+			}
+		}
+	}
+
+	// Create nav struct
+	nav := KanbanNav{
+		Col:              h.kanbanSelectedCol,
+		Row:              h.kanbanSelectedRow,
+		Focus:            h.kanbanFocus,
+		DetailOpen:       false, // Not used for scroll calculation
+		ColumnCardCounts: columnCardCounts,
+		ScrollOffsets:    h.kanbanScrollOffsets,
+	}
+
+	// Calculate available height for cards
+	// Total content height minus header line (1)
+	contentHeight := h.height - 3 // -3 for title bar, help bar, and column header
+	if contentHeight < 1 {
+		contentHeight = 1
+	}
+	availableHeight := contentHeight - 1 // -1 for column header
+	cardHeight := 1                      // Compact cards are 1 line each
+
+	// Auto-scroll
+	nav = AutoScrollToSelection(nav, availableHeight, cardHeight)
+
+	// Update scroll offsets
+	h.kanbanScrollOffsets = nav.ScrollOffsets
 }
 
 // getOtherActiveSessions returns sessions excluding the given ID and error-status sessions.
