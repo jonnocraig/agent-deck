@@ -235,6 +235,8 @@ type Home struct {
 	kanbanMoveMode      bool                // True when in move mode
 	kanbanMoveTarget    int                 // Target column index for move (0-5)
 	kanbanMoveSource    int                 // Source column index for move (0-5)
+	transitionEngine    TransitionEngine    // Column transition engine (nil-safe)
+	kanbanErrorDisplay  *ErrorDisplayMsg    // Current error with actions (nil when none)
 
 	// Update notification (async check on startup)
 	updateInfo *update.UpdateInfo
@@ -558,6 +560,11 @@ func NewHomeWithProfileAndMode(profile string) *Home {
 	// Keep settings panel profile-aware so profile overrides (e.g., Claude config dir)
 	// are displayed and edited in the correct scope.
 	h.settingsPanel.SetProfile(actualProfile)
+
+	// Initialize kanban transition engine (wraps storage for column moves + skill triggers)
+	if storage != nil {
+		h.transitionEngine = NewTransitionEngine(storage)
+	}
 
 	// Restore persisted UI state (preview mode, status filter, cursor position)
 	h.loadUIState()
@@ -3148,6 +3155,20 @@ func (h *Home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			h.setError(fmt.Errorf("Sent %d lines from '%s' to '%s'", msg.lineCount, msg.sourceTitle, msg.targetTitle))
 		}
 		return h, nil
+
+	// --- Kanban Transition Messages ---
+
+	case ExecuteTransitionMsg:
+		return h.handleExecuteTransition(msg)
+
+	case SkillCompletedMsg:
+		return h.handleSkillCompleted(msg)
+
+	case RollbackMsg:
+		return h.handleRollback(msg)
+
+	case ErrorDisplayMsg:
+		return h.handleErrorDisplay(msg)
 
 	case tickMsg:
 		// Auto-dismiss errors after 5 seconds
@@ -6527,6 +6548,145 @@ func (h *Home) autoScrollKanbanSelection() {
 
 	// Update scroll offsets
 	h.kanbanScrollOffsets = nav.ScrollOffsets
+}
+
+// --- Kanban Transition Message Handlers ---
+
+// handleExecuteTransition processes an ExecuteTransitionMsg by calling the
+// transition engine and returning appropriate follow-up commands.
+// When the result needs confirmation, it returns a ShowConfirmDialogMsg via
+// a tea.Cmd so the existing dialog infrastructure handles it.
+func (h *Home) handleExecuteTransition(msg ExecuteTransitionMsg) (tea.Model, tea.Cmd) {
+	if h.transitionEngine == nil {
+		uiLog.Warn("transition_engine_nil", slog.String("session", msg.Request.SessionID))
+		return h, nil
+	}
+
+	result := h.transitionEngine.RequestMove(msg.Request)
+
+	// Backward move needs confirmation: emit ShowConfirmDialogMsg
+	if result.NeedsConfirm {
+		dialog := BuildBackwardConfirmDialog(msg.Request)
+		return h, func() tea.Msg { return dialog }
+	}
+
+	// Move failed: display error
+	if result.Error != nil {
+		h.setError(result.Error)
+		return h, nil
+	}
+
+	// Move succeeded: trigger skill if auto-trigger resolved
+	var skillCmd tea.Cmd
+	if result.SkillName != "" {
+		skillCmd = h.triggerSkillCmd(msg.Request.SessionID, result.SkillName, result.ToColumn)
+	}
+
+	return h, tea.Batch(skillCmd, func() tea.Msg { return BoardRefreshMsg{} })
+}
+
+// handleSkillCompleted processes a SkillCompletedMsg. On success it refreshes
+// the board; on failure it shows an error with actions.
+func (h *Home) handleSkillCompleted(msg SkillCompletedMsg) (tea.Model, tea.Cmd) {
+	if msg.Success {
+		uiLog.Info("skill_completed",
+			slog.String("session", msg.SessionID),
+			slog.String("skill", msg.SkillName),
+		)
+		return h, func() tea.Msg { return BoardRefreshMsg{} }
+	}
+
+	// Skill failed: log and show error actions
+	errStr := "unknown error"
+	if msg.Error != nil {
+		errStr = msg.Error.Error()
+	}
+	uiLog.Warn("skill_failed",
+		slog.String("session", msg.SessionID),
+		slog.String("skill", msg.SkillName),
+		slog.String("error", errStr),
+	)
+
+	errDisplay := BuildSkillErrorActions(msg.SessionID, msg.SkillName, msg.Error)
+	h.kanbanErrorDisplay = &errDisplay
+	return h, func() tea.Msg { return BoardRefreshMsg{} }
+}
+
+// handleRollback processes a RollbackMsg by displaying a rollback notification
+// and refreshing the board.
+func (h *Home) handleRollback(msg RollbackMsg) (tea.Model, tea.Cmd) {
+	uiLog.Info("transition_rollback",
+		slog.String("session", msg.SessionID),
+		slog.String("from", msg.FromColumn.String()),
+		slog.String("to", msg.ToColumn.String()),
+	)
+
+	if msg.Error != nil {
+		h.setError(fmt.Errorf("rollback %s -> %s: %w", msg.FromColumn, msg.ToColumn, msg.Error))
+	} else {
+		h.setError(fmt.Errorf("Moved %s back to %s (skill failed)", msg.SessionID, msg.ToColumn))
+	}
+
+	return h, func() tea.Msg { return BoardRefreshMsg{} }
+}
+
+// handleErrorDisplay processes an ErrorDisplayMsg by storing it for rendering
+// in the detail panel.
+func (h *Home) handleErrorDisplay(msg ErrorDisplayMsg) (tea.Model, tea.Cmd) {
+	h.kanbanErrorDisplay = &msg
+	return h, nil
+}
+
+// triggerSkillCmd creates a tea.Cmd that sends a skill command to the session's
+// tmux pane. The skill is sent as a slash command (e.g., "/agentic-ai-review").
+// Returns SkillTriggeredMsg immediately; completion detection is handled by
+// the conductor in Wave 6.
+func (h *Home) triggerSkillCmd(sessionID, skillName string, column session.KanbanColumn) tea.Cmd {
+	// Defense-in-depth: validate skill name to prevent tmux command injection
+	if !ValidateSkillName(skillName) {
+		uiLog.Error("skill_trigger_name_invalid",
+			slog.String("session", sessionID),
+			slog.String("skill", skillName),
+		)
+		return nil
+	}
+
+	return func() tea.Msg {
+		inst := h.getInstanceByID(sessionID)
+		if inst == nil {
+			uiLog.Warn("skill_trigger_session_not_found",
+				slog.String("session", sessionID),
+				slog.String("skill", skillName),
+			)
+			return SkillTriggeredMsg{SessionID: sessionID, SkillName: skillName, Column: column}
+		}
+
+		tmuxSess := inst.GetTmuxSession()
+		if tmuxSess == nil {
+			uiLog.Warn("skill_trigger_no_tmux",
+				slog.String("session", sessionID),
+				slog.String("skill", skillName),
+			)
+			return SkillTriggeredMsg{SessionID: sessionID, SkillName: skillName, Column: column}
+		}
+
+		cmd := "/" + skillName
+		if err := tmuxSess.SendKeysAndEnter(cmd); err != nil {
+			uiLog.Error("skill_trigger_send_failed",
+				slog.String("session", sessionID),
+				slog.String("skill", skillName),
+				slog.String("error", err.Error()),
+			)
+		} else {
+			uiLog.Info("skill_triggered",
+				slog.String("session", sessionID),
+				slog.String("skill", skillName),
+				slog.String("column", column.String()),
+			)
+		}
+
+		return SkillTriggeredMsg{SessionID: sessionID, SkillName: skillName, Column: column}
+	}
 }
 
 // getOtherActiveSessions returns sessions excluding the given ID and error-status sessions.

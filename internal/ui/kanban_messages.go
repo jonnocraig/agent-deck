@@ -118,6 +118,7 @@ type SkillTriggeredMsg struct {
 // SkillCompletedMsg indicates a skill has finished executing
 type SkillCompletedMsg struct {
 	SessionID string
+	SkillName string
 	Success   bool
 	Error     error
 	Output    string
