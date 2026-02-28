@@ -267,19 +267,145 @@ func (h *Home) renderSessionList(width, height int) string {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// YOLO Progress Indicator Rendering
+// ────────────────────────────────────────────────────────────────────────────
+
+// Icons for YOLO progress and gate status rendering.
+const (
+	checkIcon       = "\u2713" // ✓
+	gearIcon        = "\u2699" // ⚙
+	arrowSep        = " \u2192 " // →
+	gatePassedIcon  = "\u2713" // ✓
+	gatePendingIcon = "\u23f3" // ⏳
+	gateFailedIcon  = "\u2715" // ✕
+	gateUnknownIcon = "?"
+)
+
+// columnAbbreviation maps kanban columns to 2-letter abbreviations.
+var columnAbbreviation = map[session.KanbanColumn]string{
+	session.KanbanBacklog:   "BL",
+	session.KanbanDesign:    "DE",
+	session.KanbanPlan:      "PL",
+	session.KanbanImplement: "IM",
+	session.KanbanReview:    "RE",
+	session.KanbanDone:      "DO",
+}
+
+// renderYOLOProgress renders a column progress indicator for YOLO mode.
+// Shows: BL ✓ → DE ✓ → PL ⚙ → IM → RE → DO
+//   - checkIcon (green) for completed columns
+//   - gearIcon (yellow) for current column
+//   - (dim) for pending columns
+//
+// Standalone function for testability.
+func renderYOLOProgress(currentColumn session.KanbanColumn, width int) string {
+	currentIdx := currentColumn.Index()
+
+	greenStyle := lipgloss.NewStyle().Foreground(ColorGreen).Bold(true)
+	yellowStyle := lipgloss.NewStyle().Foreground(ColorYellow).Bold(true)
+	dimStyle := lipgloss.NewStyle().Foreground(ColorTextDim)
+
+	var parts []string
+	for i, col := range kanbanColumnsOrdered {
+		abbr := columnAbbreviation[col]
+		switch {
+		case currentIdx < 0:
+			// Invalid column: render all as dim
+			parts = append(parts, dimStyle.Render(abbr))
+		case i < currentIdx:
+			// Completed
+			parts = append(parts, greenStyle.Render(checkIcon+" "+abbr))
+		case i == currentIdx && col == session.KanbanDone:
+			// Done column as current means everything is complete
+			parts = append(parts, greenStyle.Render(checkIcon+" "+abbr))
+		case i == currentIdx:
+			// Current
+			parts = append(parts, yellowStyle.Render(gearIcon+" "+abbr))
+		default:
+			// Pending
+			parts = append(parts, dimStyle.Render(abbr))
+		}
+	}
+
+	return strings.Join(parts, arrowSep)
+}
+
+// abbreviateModelName strips the "-preview" suffix from model names.
+// For example: "gemini-3-pro-preview" becomes "gemini-3-pro".
+func abbreviateModelName(name string) string {
+	return strings.TrimSuffix(name, "-preview")
+}
+
+// renderGateStatus renders per-model gate status for YOLO mode.
+// Shows: Gate: gemini ✓ gpt-5.2 ⏳ o3 ⏳
+// Status values: "passed" -> ✓ (green), "pending" -> ⏳ (yellow), "failed" -> ✕ (red)
+//
+// Returns empty string if gateStatus is nil or empty.
+// Standalone function for testability.
+func renderGateStatus(gateStatus map[string]string, width int) string {
+	if len(gateStatus) == 0 {
+		return ""
+	}
+
+	labelStyle := lipgloss.NewStyle().Foreground(ColorText)
+	greenStyle := lipgloss.NewStyle().Foreground(ColorGreen).Bold(true)
+	yellowStyle := lipgloss.NewStyle().Foreground(ColorYellow)
+	redStyle := lipgloss.NewStyle().Foreground(ColorRed).Bold(true)
+	dimStyle := lipgloss.NewStyle().Foreground(ColorTextDim)
+
+	var parts []string
+	// Iterate in sorted order for deterministic output
+	for _, model := range sortedKeys(gateStatus) {
+		status := gateStatus[model]
+		abbr := abbreviateModelName(model)
+
+		var icon string
+		switch status {
+		case "passed", "pass":
+			icon = greenStyle.Render(gatePassedIcon)
+		case "pending":
+			icon = yellowStyle.Render(gatePendingIcon)
+		case "failed", "fail":
+			icon = redStyle.Render(gateFailedIcon)
+		default:
+			icon = dimStyle.Render(gateUnknownIcon)
+		}
+		parts = append(parts, abbr+" "+icon)
+	}
+
+	return labelStyle.Render("Gate: ") + strings.Join(parts, " ")
+}
+
+// sortedKeys returns map keys in sorted order for deterministic rendering.
+func sortedKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	// Simple insertion sort for small maps (typically 2-4 models)
+	for i := 1; i < len(keys); i++ {
+		for j := i; j > 0 && keys[j] < keys[j-1]; j-- {
+			keys[j], keys[j-1] = keys[j-1], keys[j]
+		}
+	}
+	return keys
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // Kanban Board Card Rendering
 // ────────────────────────────────────────────────────────────────────────────
 
-// truncateTitle truncates a title to maxWidth characters with ellipsis.
-// Uses simple rune-based truncation since we need to handle ANSI-styled content.
+// truncateTitle truncates a title to maxWidth runes with ellipsis.
+// Uses rune-based truncation to handle multi-byte Unicode characters safely.
 func truncateTitle(title string, maxWidth int) string {
-	if len(title) <= maxWidth {
+	runes := []rune(title)
+	if len(runes) <= maxWidth {
 		return title
 	}
 	if maxWidth <= 3 {
-		return title[:maxWidth]
+		return string(runes[:maxWidth])
 	}
-	return title[:maxWidth-3] + "..."
+	return string(runes[:maxWidth-3]) + "..."
 }
 
 // kanbanStatusIcon returns the icon and style for a given status.
