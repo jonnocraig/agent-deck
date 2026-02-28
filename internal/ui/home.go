@@ -18,10 +18,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/mattn/go-runewidth"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/asheshgoplani/agent-deck/internal/clipboard"
 	"github.com/asheshgoplani/agent-deck/internal/git"
 	"github.com/asheshgoplani/agent-deck/internal/logging"
 	"github.com/asheshgoplani/agent-deck/internal/session"
@@ -95,19 +93,6 @@ const (
 	minTerminalHeight = 12 // Reduced from 20 - supports smaller screens
 )
 
-// Layout mode breakpoints for responsive design
-const (
-	layoutBreakpointSingle  = 50 // Below: single column, no preview
-	layoutBreakpointStacked = 80 // Below: stacked layout (list above preview)
-	// At or above 80: dual column (current side-by-side layout)
-)
-
-// Layout mode names
-const (
-	LayoutModeSingle  = "single"  // <50 cols: list only
-	LayoutModeStacked = "stacked" // 50-79 cols: vertical stack
-	LayoutModeDual    = "dual"    // 80+ cols: side-by-side
-)
 
 // PreviewMode defines what to show in the preview pane
 type PreviewMode int
@@ -118,28 +103,6 @@ const (
 	PreviewModeAnalytics                    // Show analytics only
 )
 
-// Responsive breakpoints for empty state content tiers
-// These define when to show full/compact/minimal content
-const (
-	// Width breakpoints (for left panel after 35% split)
-	emptyStateWidthFull    = 45 // Full content with all hints
-	emptyStateWidthCompact = 35 // Compact: fewer hints, shorter text
-	// Below 35: minimal mode (icon + title + 1 hint)
-
-	// Height breakpoints (for content area)
-	emptyStateHeightFull    = 18 // Full content with generous spacing
-	emptyStateHeightCompact = 12 // Compact: reduced spacing
-	// Below 12: minimal mode
-)
-
-// pendingVagrantInfo tracks a Vagrant VM boot that is in progress
-// before the session instance exists. Only one VM can boot at a time.
-type pendingVagrantInfo struct {
-	name      string
-	path      string
-	groupPath string
-	startTime time.Time
-}
 
 // Home is the main application model
 type Home struct {
@@ -262,6 +225,19 @@ type Home struct {
 	// Watcher warning (shown if fsnotify may not work, e.g., on 9p/NFS)
 	watcherWarning string
 
+	// Kanban mode state
+	kanbanMode          bool                // True when displaying the kanban board view
+	kanbanFocus         FocusPanel          // Which kanban panel has focus (sidebar/board/detail)
+	kanbanSelectedCol   int                 // Currently selected column index (0-5)
+	kanbanSelectedRow   int                 // Currently selected card index within column
+	kanbanScrollOffsets [6]int              // Scroll offset (first visible card index) for each column
+	kanbanSidebarState  KanbanSidebarState  // Sidebar state (groups, selection, focus)
+	kanbanMoveMode      bool                // True when in move mode
+	kanbanMoveTarget    int                 // Target column index for move (0-5)
+	kanbanMoveSource    int                 // Source column index for move (0-5)
+	transitionEngine    TransitionEngine    // Column transition engine (nil-safe)
+	kanbanErrorDisplay  *ErrorDisplayMsg    // Current error with actions (nil when none)
+
 	// Update notification (async check on startup)
 	updateInfo *update.UpdateInfo
 
@@ -270,7 +246,6 @@ type Home struct {
 	resumingSessions   map[string]time.Time // sessionID -> resume time (for restart/resume)
 	mcpLoadingSessions map[string]time.Time // sessionID -> MCP reload time
 	forkingSessions    map[string]time.Time // sessionID -> fork start time (fork in progress)
-	pendingVagrantBoot *pendingVagrantInfo  // Pre-session Vagrant VM boot animation (nil when inactive)
 	animationFrame     int                  // Current frame for spinner animation
 
 	// Context for cleanup
@@ -585,6 +560,11 @@ func NewHomeWithProfileAndMode(profile string) *Home {
 	// Keep settings panel profile-aware so profile overrides (e.g., Claude config dir)
 	// are displayed and edited in the correct scope.
 	h.settingsPanel.SetProfile(actualProfile)
+
+	// Initialize kanban transition engine (wraps storage for column moves + skill triggers)
+	if storage != nil {
+		h.transitionEngine = NewTransitionEngine(storage)
+	}
 
 	// Restore persisted UI state (preview mode, status filter, cursor position)
 	h.loadUIState()
@@ -2451,9 +2431,6 @@ func (h *Home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return h, nil
 
 	case sessionCreatedMsg:
-		// Clear pending vagrant boot animation (VM boot completed or failed)
-		h.pendingVagrantBoot = nil
-
 		// Handle reload scenario: session was already started in tmux, we MUST save it to JSON
 		// even during reload, otherwise the session becomes orphaned (exists in tmux but not in storage)
 		h.reloadMu.Lock()
@@ -3179,6 +3156,20 @@ func (h *Home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return h, nil
 
+	// --- Kanban Transition Messages ---
+
+	case ExecuteTransitionMsg:
+		return h.handleExecuteTransition(msg)
+
+	case SkillCompletedMsg:
+		return h.handleSkillCompleted(msg)
+
+	case RollbackMsg:
+		return h.handleRollback(msg)
+
+	case ErrorDisplayMsg:
+		return h.handleErrorDisplay(msg)
+
 	case tickMsg:
 		// Auto-dismiss errors after 5 seconds
 		if h.err != nil && !h.errTime.IsZero() && time.Since(h.errTime) > 5*time.Second {
@@ -3271,11 +3262,6 @@ func (h *Home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h.cleanupExpiredAnimations(h.resumingSessions, claudeTimeout, defaultTimeout)
 		h.cleanupExpiredAnimations(h.mcpLoadingSessions, claudeTimeout, defaultTimeout)
 		h.cleanupExpiredAnimations(h.forkingSessions, claudeTimeout, defaultTimeout)
-
-		// Clean up stale pending vagrant boot (5 min safety timeout)
-		if h.pendingVagrantBoot != nil && time.Since(h.pendingVagrantBoot.startTime) > 5*time.Minute {
-			h.pendingVagrantBoot = nil
-		}
 
 		// Notification bar sync handled by background worker (syncNotificationsBackground)
 		// which runs even when TUI is paused during tea.Exec
@@ -3658,16 +3644,6 @@ func (h *Home) handleNewDialogKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		h.newDialog.Hide()
 		h.clearError()
 
-		// Set pending vagrant boot feedback before async session creation
-		if claudeOpts != nil && claudeOpts.UseVagrantMode {
-			h.pendingVagrantBoot = &pendingVagrantInfo{
-				name:      name,
-				path:      path,
-				groupPath: groupPath,
-				startTime: time.Now(),
-			}
-		}
-
 		geminiYoloMode := h.newDialog.IsGeminiYoloMode()
 		sandboxMode := h.newDialog.IsSandboxEnabled()
 
@@ -3697,6 +3673,11 @@ func (h *Home) handleNewDialogKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // handleMainKey handles keys in main view
 func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// When kanban mode is active, route most keys to the kanban handler
+	if h.kanbanMode {
+		return h.handleKanbanKey(msg)
+	}
+
 	switch msg.String() {
 	case "q", "ctrl+c":
 		return h.tryQuit()
@@ -4362,6 +4343,15 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			cmd := h.geminiModelDialog.Show(inst.ID, inst.GeminiModel)
 			return h, cmd
 		}
+		return h, nil
+
+	case "ctrl+k":
+		// Enter kanban board mode
+		h.kanbanMode = true
+		h.kanbanFocus = PanelBoard
+		h.kanbanSelectedCol = 0
+		h.kanbanSelectedRow = 0
+		h.rebuildKanbanSidebar()
 		return h, nil
 
 	case "ctrl+z":
@@ -5326,6 +5316,88 @@ func (h *Home) quickCreateSession() tea.Cmd {
 	)
 }
 
+// createKanbanSession creates a session in the specified kanban column with smart defaults.
+// Similar to quickCreateSession but assigns the session to a kanban column.
+func (h *Home) createKanbanSession(column session.KanbanColumn) tea.Cmd {
+	groupPath := session.DefaultGroupPath
+	projectPath := ""
+	tool := session.GetDefaultTool()
+	if tool == "" {
+		tool = "claude"
+	}
+	command := tool
+	var toolOptionsJSON json.RawMessage
+
+	// Try to inherit settings from the most recent session in the current kanban view
+	kanbanInstances := h.getKanbanInstances()
+	var mostRecent *session.Instance
+	for _, inst := range kanbanInstances {
+		if mostRecent == nil || inst.CreatedAt.After(mostRecent.CreatedAt) {
+			mostRecent = inst
+		}
+	}
+	if mostRecent != nil {
+		projectPath = mostRecent.ProjectPath
+		tool = mostRecent.Tool
+		command = mostRecent.Command
+		groupPath = mostRecent.GroupPath
+		if len(mostRecent.ToolOptionsJSON) > 0 {
+			toolOptionsJSON = mostRecent.ToolOptionsJSON
+		}
+	}
+
+	// Fallback for path
+	if projectPath == "" {
+		var err error
+		projectPath, err = os.Getwd()
+		if err != nil {
+			return func() tea.Msg {
+				return sessionCreatedMsg{err: fmt.Errorf("cannot determine project path: %w", err)}
+			}
+		}
+	}
+
+	// Generate unique name
+	h.instancesMu.RLock()
+	name := session.GenerateUniqueSessionName(h.instances, groupPath)
+	h.instancesMu.RUnlock()
+
+	return func() tea.Msg {
+		// Check tmux availability before creating session
+		if err := tmux.IsTmuxAvailable(); err != nil {
+			return sessionCreatedMsg{err: fmt.Errorf("cannot create session: %w", err)}
+		}
+
+		var inst *session.Instance
+		if groupPath != "" {
+			inst = session.NewInstanceWithGroupAndTool(name, projectPath, groupPath, tool)
+		} else {
+			inst = session.NewInstanceWithTool(name, projectPath, tool)
+		}
+		inst.Command = command
+
+		// Apply generic tool options
+		if len(toolOptionsJSON) > 0 {
+			inst.ToolOptionsJSON = toolOptionsJSON
+		}
+
+		// Assign to kanban column
+		inst.KanbanColumn = &column
+
+		uiLog.Info("kanban_session_create_starting",
+			slog.String("tool", inst.Tool),
+			slog.String("path", inst.ProjectPath),
+			slog.String("column", string(column)),
+		)
+		if err := inst.Start(); err != nil {
+			uiLog.Error("kanban_session_create_failed", slog.String("error", err.Error()))
+			return sessionCreatedMsg{err: err}
+		}
+		uiLog.Info("kanban_session_create_succeeded", slog.String("id", inst.ID))
+		return sessionCreatedMsg{instance: inst}
+	}
+}
+
 // mostRecentPathInGroup returns the project path of the most recently created
 // session in the given group, or empty string if no sessions exist.
 func (h *Home) mostRecentPathInGroup(groupPath string) string {
@@ -5666,118 +5738,6 @@ func (h *Home) countSessionStatuses() (running, waiting, idle, errored int) {
 	return running, waiting, idle, errored
 }
 
-// renderFilterBar renders the quick filter pills
-// Format: [All] [● Running 2] [◐ Waiting 1] [○ Idle 5] [✕ Error 1]
-func (h *Home) renderFilterBar() string {
-	running, waiting, idle, errored := h.countSessionStatuses()
-
-	// Pill styling
-	activePillStyle := lipgloss.NewStyle().
-		Foreground(ColorBg).
-		Background(ColorAccent).
-		Bold(true).
-		Padding(0, 1)
-
-	inactivePillStyle := lipgloss.NewStyle().
-		Foreground(ColorText).
-		Background(ColorSurface).
-		Padding(0, 1)
-
-	dimPillStyle := lipgloss.NewStyle().
-		Foreground(ColorText).
-		Faint(true).
-		Padding(0, 1)
-
-	// Build pills
-	var pills []string
-
-	// "All" pill
-	allLabel := "All"
-	if h.statusFilter == "" {
-		pills = append(pills, activePillStyle.Render(allLabel))
-	} else {
-		pills = append(pills, inactivePillStyle.Render(allLabel))
-	}
-
-	// Running pill (green when active, dim if 0)
-	runningLabel := fmt.Sprintf("● %d", running)
-	if h.statusFilter == session.StatusRunning {
-		pills = append(pills, lipgloss.NewStyle().
-			Foreground(ColorBg).
-			Background(ColorGreen).
-			Bold(true).
-			Padding(0, 1).Render(runningLabel))
-	} else if running > 0 {
-		pills = append(pills, lipgloss.NewStyle().
-			Foreground(ColorGreen).
-			Background(ColorSurface).
-			Padding(0, 1).Render(runningLabel))
-	} else {
-		pills = append(pills, dimPillStyle.Render(runningLabel))
-	}
-
-	// Waiting pill (yellow when active)
-	waitingLabel := fmt.Sprintf("◐ %d", waiting)
-	if h.statusFilter == session.StatusWaiting {
-		pills = append(pills, lipgloss.NewStyle().
-			Foreground(ColorBg).
-			Background(ColorYellow).
-			Bold(true).
-			Padding(0, 1).Render(waitingLabel))
-	} else if waiting > 0 {
-		pills = append(pills, lipgloss.NewStyle().
-			Foreground(ColorYellow).
-			Background(ColorSurface).
-			Padding(0, 1).Render(waitingLabel))
-	} else {
-		pills = append(pills, dimPillStyle.Render(waitingLabel))
-	}
-
-	// Idle pill (gray when active)
-	idleLabel := fmt.Sprintf("○ %d", idle)
-	if h.statusFilter == session.StatusIdle {
-		pills = append(pills, lipgloss.NewStyle().
-			Foreground(ColorBg).
-			Background(ColorTextDim).
-			Bold(true).
-			Padding(0, 1).Render(idleLabel))
-	} else if idle > 0 {
-		pills = append(pills, lipgloss.NewStyle().
-			Foreground(ColorText).
-			Background(ColorSurface).
-			Padding(0, 1).Render(idleLabel))
-	} else {
-		pills = append(pills, dimPillStyle.Render(idleLabel))
-	}
-
-	// Error pill (red when active)
-	if errored > 0 || h.statusFilter == session.StatusError {
-		errorLabel := fmt.Sprintf("✕ %d", errored)
-		if h.statusFilter == session.StatusError {
-			pills = append(pills, lipgloss.NewStyle().
-				Foreground(ColorBg).
-				Background(ColorRed).
-				Bold(true).
-				Padding(0, 1).Render(errorLabel))
-		} else if errored > 0 {
-			pills = append(pills, lipgloss.NewStyle().
-				Foreground(ColorRed).
-				Background(ColorSurface).
-				Padding(0, 1).Render(errorLabel))
-		}
-	}
-
-	// Hint for keyboard shortcuts (shift+number to filter, 0 to clear)
-	hintStyle := lipgloss.NewStyle().Foreground(ColorComment).Faint(true)
-	hint := hintStyle.Render("  !@#$ filter • 0 all")
-
-	// Join pills with spaces (leading space replaces Padding)
-	filterRow := " " + strings.Join(pills, " ") + hint
-
-	return lipgloss.NewStyle().
-		MaxWidth(h.width).
-		Render(filterRow)
-}
 
 // updateSizes updates component sizes
 func (h *Home) updateSizes() {
@@ -6010,17 +5970,21 @@ func (h *Home) View() string {
 	// Height breakdown: -1 header, -filterBarHeight filter, -updateBannerHeight banner, -maintenanceBannerHeight maintenance, -helpBarHeight help
 	contentHeight := h.height - 1 - helpBarHeight - updateBannerHeight - maintenanceBannerHeight - filterBarHeight
 
-	// Route to appropriate layout based on terminal width
-	layoutMode := h.getLayoutMode()
-
+	// Route to kanban board or standard layout
 	var mainContent string
-	switch layoutMode {
-	case LayoutModeSingle:
-		mainContent = h.renderSingleColumnLayout(contentHeight)
-	case LayoutModeStacked:
-		mainContent = h.renderStackedLayout(contentHeight)
-	default: // LayoutModeDual
-		mainContent = h.renderDualColumnLayout(contentHeight)
+	if h.kanbanMode {
+		mainContent = h.renderKanbanLayout(contentHeight)
+	} else {
+		// Route to appropriate layout based on terminal width
+		layoutMode := h.getLayoutMode()
+		switch layoutMode {
+		case LayoutModeSingle:
+			mainContent = h.renderSingleColumnLayout(contentHeight)
+		case LayoutModeStacked:
+			mainContent = h.renderStackedLayout(contentHeight)
+		default: // LayoutModeDual
+			mainContent = h.renderDualColumnLayout(contentHeight)
+		}
 	}
 
 	// Ensure mainContent has exact height
@@ -6077,2898 +6041,6 @@ func (h *Home) View() string {
 		Render(result)
 }
 
-// renderPanelTitle creates a styled section title with underline
-func (h *Home) renderPanelTitle(title string, width int) string {
-	// Truncate title if it exceeds width
-	if len(title) > width {
-		if width > 3 {
-			title = title[:width-3] + "..."
-		} else {
-			title = title[:width]
-		}
-	}
-
-	titleStyle := lipgloss.NewStyle().
-		Foreground(ColorCyan).
-		Bold(true).
-		Width(width)
-
-	underlineStyle := lipgloss.NewStyle().
-		Foreground(ColorBorder).
-		Width(width)
-
-	// Create underline that extends to panel width
-	underlineLen := max(0, width)
-	underline := underlineStyle.Render(strings.Repeat("─", underlineLen))
-
-	return titleStyle.Render(title) + "\n" + underline
-}
-
-// renderLoadingSplash creates a simple centered loading splash screen
-// Shows the three status indicators (running/waiting/idle) cycling
-func renderLoadingSplash(width, height int, frame int) string {
-	// Status indicator cycle: each status lights up in sequence
-	// Frame 0-1: Running (green ●)
-	// Frame 2-3: Waiting (yellow ◐)
-	// Frame 4-5: Idle (gray ○)
-	// Frame 6-7: All lit together
-
-	phase := (frame / 2) % 4
-
-	// Active status colors (match the actual TUI colors)
-	greenStyle := lipgloss.NewStyle().Foreground(ColorGreen).Bold(true)
-	yellowStyle := lipgloss.NewStyle().Foreground(ColorYellow).Bold(true)
-	grayStyle := lipgloss.NewStyle().Foreground(ColorTextDim)
-
-	// Dim style for inactive indicators
-	dimStyle := lipgloss.NewStyle().Foreground(ColorComment)
-
-	// Text styles
-	titleStyle := lipgloss.NewStyle().Foreground(ColorText).Bold(true)
-	subtitleStyle := lipgloss.NewStyle().Foreground(ColorTextDim)
-
-	var content strings.Builder
-
-	if width >= 40 && height >= 10 {
-		// Full version - big status indicators in a row
-		var running, waiting, idle string
-
-		switch phase {
-		case 0: // Running highlighted
-			running = greenStyle.Render("●")
-			waiting = dimStyle.Render("◐")
-			idle = dimStyle.Render("○")
-		case 1: // Waiting highlighted
-			running = dimStyle.Render("●")
-			waiting = yellowStyle.Render("◐")
-			idle = dimStyle.Render("○")
-		case 2: // Idle highlighted
-			running = dimStyle.Render("●")
-			waiting = dimStyle.Render("◐")
-			idle = grayStyle.Render("○")
-		case 3: // All lit
-			running = greenStyle.Render("●")
-			waiting = yellowStyle.Render("◐")
-			idle = grayStyle.Render("○")
-		}
-
-		content.WriteString("\n")
-		content.WriteString("      " + running + "   " + waiting + "   " + idle + "      \n")
-		content.WriteString("\n")
-		content.WriteString(titleStyle.Render("Agent Deck") + "\n")
-		content.WriteString("\n")
-		content.WriteString(subtitleStyle.Render("Loading sessions..."))
-	} else if width >= 25 && height >= 6 {
-		// Compact version
-		var indicators string
-		switch phase {
-		case 0:
-			indicators = greenStyle.Render("●") + " " + dimStyle.Render("◐") + " " + dimStyle.Render("○")
-		case 1:
-			indicators = dimStyle.Render("●") + " " + yellowStyle.Render("◐") + " " + dimStyle.Render("○")
-		case 2:
-			indicators = dimStyle.Render("●") + " " + dimStyle.Render("◐") + " " + grayStyle.Render("○")
-		case 3:
-			indicators = greenStyle.Render("●") + " " + yellowStyle.Render("◐") + " " + grayStyle.Render("○")
-		}
-		content.WriteString(indicators + "\n")
-		content.WriteString("\n")
-		content.WriteString(titleStyle.Render("Agent Deck") + "\n")
-		content.WriteString(subtitleStyle.Render("Loading..."))
-	} else {
-		// Minimal
-		content.WriteString(greenStyle.Render("●") + " " + titleStyle.Render("Agent Deck") + "\n")
-		content.WriteString(subtitleStyle.Render("Loading..."))
-	}
-
-	// Center the content
-	contentStyle := lipgloss.NewStyle().
-		Align(lipgloss.Center).
-		Width(width)
-
-	rendered := lipgloss.Place(
-		width, height,
-		lipgloss.Center, lipgloss.Center,
-		contentStyle.Render(content.String()),
-	)
-
-	return rendered
-}
-
-// renderQuittingSplash renders a splash screen during application shutdown
-func renderQuittingSplash(width, height int, frame int) string {
-	// Status indicator cycle (matches loading splash for consistency)
-	phase := (frame / 2) % 4
-
-	// Active status colors
-	greenStyle := lipgloss.NewStyle().Foreground(ColorGreen).Bold(true)
-	yellowStyle := lipgloss.NewStyle().Foreground(ColorYellow).Bold(true)
-	grayStyle := lipgloss.NewStyle().Foreground(ColorTextDim)
-	dimStyle := lipgloss.NewStyle().Foreground(ColorComment)
-
-	// Text styles
-	titleStyle := lipgloss.NewStyle().Foreground(ColorText).Bold(true)
-	subtitleStyle := lipgloss.NewStyle().Foreground(ColorYellow)
-
-	var content strings.Builder
-
-	if width >= 40 && height >= 10 {
-		var running, waiting, idle string
-		switch phase {
-		case 0:
-			running = greenStyle.Render("●")
-			waiting = dimStyle.Render("◐")
-			idle = dimStyle.Render("○")
-		case 1:
-			running = dimStyle.Render("●")
-			waiting = yellowStyle.Render("◐")
-			idle = dimStyle.Render("○")
-		case 2:
-			running = dimStyle.Render("●")
-			waiting = dimStyle.Render("◐")
-			idle = grayStyle.Render("○")
-		case 3:
-			running = greenStyle.Render("●")
-			waiting = yellowStyle.Render("◐")
-			idle = grayStyle.Render("○")
-		}
-
-		content.WriteString("\n")
-		content.WriteString("      " + running + "   " + waiting + "   " + idle + "      \n")
-		content.WriteString("\n")
-		content.WriteString(titleStyle.Render("Agent Deck") + "\n")
-		content.WriteString("\n")
-		content.WriteString(subtitleStyle.Render("Shutting down..."))
-	} else {
-		// Compact/Minimal
-		content.WriteString(titleStyle.Render("Agent Deck") + "\n")
-		content.WriteString(subtitleStyle.Render("Shutting down..."))
-	}
-
-	contentStyle := lipgloss.NewStyle().
-		Align(lipgloss.Center).
-		Width(width)
-
-	return lipgloss.Place(
-		width, height,
-		lipgloss.Center, lipgloss.Center,
-		contentStyle.Render(content.String()),
-	)
-}
-
-// EmptyStateConfig holds content for responsive empty state rendering
-type EmptyStateConfig struct {
-	Icon     string
-	Title    string
-	Subtitle string
-	Hints    []string // Full list of hints (will be reduced based on space)
-}
-
-// renderEmptyStateResponsive creates a centered empty state that adapts to available space
-// Uses progressive disclosure: full → compact → minimal based on width/height
-func renderEmptyStateResponsive(config EmptyStateConfig, width, height int) string {
-	// Determine content tier based on available space
-	// Use the more restrictive of width or height constraints
-	tier := "full"
-	if width < emptyStateWidthCompact || height < emptyStateHeightCompact {
-		tier = "minimal"
-	} else if width < emptyStateWidthFull || height < emptyStateHeightFull {
-		tier = "compact"
-	}
-
-	// Adaptive padding based on tier
-	var vPad, hPad int
-	switch tier {
-	case "full":
-		vPad, hPad = spacingNormal, spacingLarge
-	case "compact":
-		vPad, hPad = spacingTight, spacingNormal
-	case "minimal":
-		vPad, hPad = 0, spacingTight
-	}
-
-	// Styles
-	iconStyle := lipgloss.NewStyle().
-		Foreground(ColorAccent).
-		Bold(true)
-	titleStyle := lipgloss.NewStyle().
-		Foreground(ColorText).
-		Bold(true)
-	subtitleStyle := lipgloss.NewStyle().
-		Foreground(ColorText).
-		Italic(true)
-	hintStyle := lipgloss.NewStyle().
-		Foreground(ColorComment)
-
-	var content strings.Builder
-
-	// Icon - always shown but with adaptive spacing
-	content.WriteString(iconStyle.Render(config.Icon))
-	if tier == "full" {
-		content.WriteString("\n\n")
-	} else {
-		content.WriteString("\n")
-	}
-
-	// Title - always shown
-	content.WriteString(titleStyle.Render(config.Title))
-
-	// Subtitle - shown in full and compact modes
-	if config.Subtitle != "" && tier != "minimal" {
-		content.WriteString("\n")
-		// Truncate subtitle if width is tight
-		subtitle := config.Subtitle
-		maxSubtitleWidth := width - hPad*2 - 4 // Account for padding and margins
-		if maxSubtitleWidth > 0 && len(subtitle) > maxSubtitleWidth {
-			subtitle = subtitle[:maxSubtitleWidth-3] + "..."
-		}
-		content.WriteString(subtitleStyle.Render(subtitle))
-	}
-
-	// Hints - progressive disclosure based on tier
-	if len(config.Hints) > 0 {
-		var hintsToShow []string
-		switch tier {
-		case "full":
-			hintsToShow = config.Hints // Show all
-		case "compact":
-			// Show first 2 hints max
-			if len(config.Hints) > 2 {
-				hintsToShow = config.Hints[:2]
-			} else {
-				hintsToShow = config.Hints
-			}
-		case "minimal":
-			// Show only the first (most important) hint
-			hintsToShow = config.Hints[:1]
-		}
-
-		if tier == "full" {
-			content.WriteString("\n\n")
-		} else {
-			content.WriteString("\n")
-		}
-
-		for i, hint := range hintsToShow {
-			// Truncate hint if width is tight
-			displayHint := hint
-			maxHintWidth := width - hPad*2 - 6 // Account for "• " prefix and margins
-			if maxHintWidth > 0 && len(displayHint) > maxHintWidth {
-				displayHint = displayHint[:maxHintWidth-3] + "..."
-			}
-			content.WriteString(hintStyle.Render("• " + displayHint))
-			if i < len(hintsToShow)-1 {
-				content.WriteString("\n")
-			}
-		}
-	}
-
-	contentStyle := lipgloss.NewStyle().
-		Foreground(ColorText).
-		Align(lipgloss.Center).
-		Padding(vPad, hPad).
-		MaxWidth(width)
-
-	rendered := contentStyle.Render(content.String())
-
-	// Ensure exact height
-	return ensureExactHeight(rendered, height)
-}
-
-// ensureExactHeight is a critical helper that ensures any content has EXACTLY n lines.
-// This is essential for consistent TUI layout across all platforms and terminal sizes.
-//
-// Behavior:
-//   - If content has fewer lines than n: pads with blank lines at the end
-//   - If content has more lines than n: truncates from the end (keeps header/start)
-//   - Returns content with exactly n lines (n-1 internal newlines, no trailing newline)
-//
-// This function handles ANSI-styled content correctly by counting \n characters
-// rather than visual lines, which works reliably across all terminal emulators.
-func ensureExactHeight(content string, n int) string {
-	if n <= 0 {
-		return ""
-	}
-
-	// Split into lines
-	lines := strings.Split(content, "\n")
-
-	// Truncate or pad to exactly n lines
-	if len(lines) > n {
-		// Keep first n lines (preserves header info)
-		lines = lines[:n]
-	} else if len(lines) < n {
-		// Pad with blank lines
-		for len(lines) < n {
-			lines = append(lines, "")
-		}
-	}
-
-	// Join back - this creates n-1 newlines for n lines
-	return strings.Join(lines, "\n")
-}
-
-// ensureExactWidth ensures each line in content has exactly the specified visual width.
-// This is essential for proper horizontal panel alignment in lipgloss.JoinHorizontal.
-//
-// CRITICAL: Uses lipgloss.Width() for measurement to stay consistent with
-// lipgloss.JoinHorizontal's internal width calculation. Using a different
-// measurement (e.g. runewidth.StringWidth after custom ANSI stripping) can
-// disagree by even 1 character, causing JoinHorizontal to pad all lines to
-// the wider measurement. This makes the joined output exceed terminal width,
-// lines wrap, and Bubble Tea's renderer loses cursor tracking — producing
-// duplicated/stacked content (the "scrolling artifact" bug).
-//
-// Behavior:
-//   - Measures width using lipgloss.Width (same as JoinHorizontal)
-//   - Pads short lines with spaces to reach target width
-//   - Truncates long lines using lipgloss.MaxWidth (preserves ANSI where possible)
-//   - Guarantees every line is exactly `width` visual characters
-func ensureExactWidth(content string, width int) string {
-	if width <= 0 {
-		return content
-	}
-
-	lines := strings.Split(content, "\n")
-	result := make([]string, len(lines))
-
-	for i, line := range lines {
-		// Measure visual width using lipgloss (same measurement as JoinHorizontal)
-		displayWidth := lipgloss.Width(line)
-
-		if displayWidth == width {
-			result[i] = line
-		} else if displayWidth < width {
-			// Pad with spaces to reach target width
-			result[i] = line + strings.Repeat(" ", width-displayWidth)
-		} else {
-			// Line too wide — truncate using lipgloss for consistent ANSI handling
-			truncated := lipgloss.NewStyle().MaxWidth(width).Render(line)
-			// Verify and pad if truncation left it short
-			truncWidth := lipgloss.Width(truncated)
-			if truncWidth < width {
-				truncated += strings.Repeat(" ", width-truncWidth)
-			}
-			result[i] = truncated
-		}
-	}
-
-	return strings.Join(result, "\n")
-}
-
-// renderDualColumnLayout renders side-by-side panels for wide terminals (80+ cols)
-func (h *Home) renderDualColumnLayout(contentHeight int) string {
-	var b strings.Builder
-
-	// Calculate panel widths (35% left, 65% right for more preview space)
-	leftWidth := int(float64(h.width) * 0.35)
-	rightWidth := h.width - leftWidth - 3 // -3 for separator
-
-	// Panel title is exactly 2 lines (title + underline)
-	// Panel content gets the remaining space: contentHeight - 2
-	panelTitleLines := 2
-	panelContentHeight := contentHeight - panelTitleLines
-
-	// Build left panel (session list) with styled title
-	leftTitle := h.renderPanelTitle("SESSIONS", leftWidth)
-	leftContent := h.renderSessionList(leftWidth, panelContentHeight)
-	// CRITICAL: Ensure left content has exactly panelContentHeight lines
-	leftContent = ensureExactHeight(leftContent, panelContentHeight)
-	leftPanel := leftTitle + "\n" + leftContent
-
-	// Build right panel (preview) with styled title
-	rightTitle := h.renderPanelTitle("PREVIEW", rightWidth)
-	rightContent := h.renderPreviewPane(rightWidth, panelContentHeight)
-	// CRITICAL: Ensure right content has exactly panelContentHeight lines
-	rightContent = ensureExactHeight(rightContent, panelContentHeight)
-	rightPanel := rightTitle + "\n" + rightContent
-
-	// Build separator - must be exactly contentHeight lines
-	separatorStyle := lipgloss.NewStyle().Foreground(ColorBorder)
-	separatorLines := make([]string, contentHeight)
-	for i := range separatorLines {
-		separatorLines[i] = separatorStyle.Render(" │ ")
-	}
-	separator := strings.Join(separatorLines, "\n")
-
-	// CRITICAL: Ensure both panels have exactly contentHeight lines before joining
-	leftPanel = ensureExactHeight(leftPanel, contentHeight)
-	rightPanel = ensureExactHeight(rightPanel, contentHeight)
-
-	// CRITICAL: Ensure both panels have exactly the correct width for proper alignment
-	// Without this, variable-width lines cause JoinHorizontal to misalign content
-	leftPanel = ensureExactWidth(leftPanel, leftWidth)
-	rightPanel = ensureExactWidth(rightPanel, rightWidth)
-
-	// Join panels horizontally - all components have exact heights AND widths now
-	mainContent := lipgloss.JoinHorizontal(lipgloss.Top, leftPanel, separator, rightPanel)
-
-	// Safety net: enforce per-line MaxWidth on the joined output.
-	// Even with ensureExactWidth, JoinHorizontal can produce lines wider than
-	// h.width due to separator ANSI codes or rounding. Any line that wraps in the
-	// terminal adds a visual line, which shifts Bubble Tea's cursor tracking and
-	// causes duplicated/stacked content on scroll.
-	mainContent = lipgloss.NewStyle().MaxWidth(h.width).Render(mainContent)
-
-	b.WriteString(mainContent)
-
-	return b.String()
-}
-
-// renderStackedLayout renders list above preview for medium terminals (50-79 cols)
-func (h *Home) renderStackedLayout(totalHeight int) string {
-	var b strings.Builder
-
-	// Split height: 60% list, 40% preview
-	listHeight := (totalHeight * 60) / 100
-	previewHeight := totalHeight - listHeight - 1 // -1 for separator
-
-	if listHeight < 5 {
-		listHeight = 5
-	}
-	if previewHeight < 3 {
-		previewHeight = 3
-	}
-
-	// Session list (full width)
-	listTitle := h.renderPanelTitle("SESSIONS", h.width)
-	listContent := h.renderSessionList(h.width, listHeight-2) // -2 for title
-	listContent = ensureExactHeight(listContent, listHeight-2)
-	b.WriteString(listTitle)
-	b.WriteString("\n")
-	b.WriteString(listContent)
-	b.WriteString("\n")
-
-	// Separator
-	sepStyle := lipgloss.NewStyle().Foreground(ColorBorder)
-	b.WriteString(sepStyle.Render(strings.Repeat("─", max(0, h.width))))
-	b.WriteString("\n")
-
-	// Preview (full width)
-	previewTitle := h.renderPanelTitle("PREVIEW", h.width)
-	previewContent := h.renderPreviewPane(h.width, previewHeight-2) // -2 for title
-	previewContent = ensureExactHeight(previewContent, previewHeight-2)
-	b.WriteString(previewTitle)
-	b.WriteString("\n")
-	b.WriteString(previewContent)
-
-	return b.String()
-}
-
-// renderSingleColumnLayout renders list only for narrow terminals (<50 cols)
-func (h *Home) renderSingleColumnLayout(totalHeight int) string {
-	var b strings.Builder
-
-	// Full height for list
-	listHeight := totalHeight - 2 // -2 for title
-
-	listTitle := h.renderPanelTitle("SESSIONS", h.width)
-	listContent := h.renderSessionList(h.width, listHeight)
-	listContent = ensureExactHeight(listContent, listHeight)
-
-	b.WriteString(listTitle)
-	b.WriteString("\n")
-	b.WriteString(listContent)
-
-	return b.String()
-}
-
-// renderSectionDivider creates a modern section divider with optional centered label
-// Format: ─────────── Label ─────────── (lines extend to fill width)
-func renderSectionDivider(label string, width int) string {
-	lineStyle := lipgloss.NewStyle().Foreground(ColorBorder)
-
-	if label == "" {
-		return lineStyle.Render(strings.Repeat("─", max(0, width)))
-	}
-
-	// Label with subtle background for better visibility
-	labelStyle := lipgloss.NewStyle().
-		Foreground(ColorText).
-		Bold(true)
-
-	// Calculate side widths
-	labelWidth := len(label) + 2 // +2 for spacing on each side of label
-	sideWidth := (width - labelWidth) / 2
-	if sideWidth < 3 {
-		sideWidth = 3
-	}
-
-	return lineStyle.Render(strings.Repeat("─", sideWidth)) +
-		" " + labelStyle.Render(label) + " " +
-		lineStyle.Render(strings.Repeat("─", sideWidth))
-}
-
-// renderToolStatusLine renders a Status + Session line for a tool section.
-// sessionID is the detected session ID (empty = not connected).
-// detectedAt is when detection ran (zero = still detecting, used only when threeState is true).
-// threeState enables the "Detecting..." intermediate state (for tools like OpenCode/Codex).
-func renderToolStatusLine(b *strings.Builder, sessionID string, detectedAt time.Time, threeState bool) {
-	labelStyle := lipgloss.NewStyle().Foreground(ColorText)
-	valueStyle := lipgloss.NewStyle().Foreground(ColorText)
-
-	if sessionID != "" {
-		statusStyle := lipgloss.NewStyle().Foreground(ColorGreen).Bold(true)
-		b.WriteString(labelStyle.Render("Status:  "))
-		b.WriteString(statusStyle.Render("● Connected"))
-		b.WriteString("\n")
-
-		b.WriteString(labelStyle.Render("Session: "))
-		b.WriteString(valueStyle.Render(sessionID))
-		b.WriteString("\n")
-	} else if threeState && detectedAt.IsZero() {
-		statusStyle := lipgloss.NewStyle().Foreground(ColorYellow)
-		b.WriteString(labelStyle.Render("Status:  "))
-		b.WriteString(statusStyle.Render("◐ Detecting session..."))
-		b.WriteString("\n")
-	} else {
-		statusStyle := lipgloss.NewStyle().Foreground(ColorText)
-		b.WriteString(labelStyle.Render("Status:  "))
-		if threeState {
-			b.WriteString(statusStyle.Render("○ No session found"))
-		} else {
-			b.WriteString(statusStyle.Render("○ Not connected"))
-		}
-		b.WriteString("\n")
-	}
-}
-
-// renderDetectedAtLine renders a "Detected: X ago" line.
-func renderDetectedAtLine(b *strings.Builder, detectedAt time.Time) {
-	if detectedAt.IsZero() {
-		return
-	}
-	labelStyle := lipgloss.NewStyle().Foreground(ColorText)
-	dimStyle := lipgloss.NewStyle().Foreground(ColorText).Italic(true)
-	b.WriteString(labelStyle.Render("Detected:"))
-	b.WriteString(dimStyle.Render(" " + formatRelativeTime(detectedAt)))
-	b.WriteString("\n")
-}
-
-// renderForkHintLine renders the fork keyboard hint line.
-func renderForkHintLine(b *strings.Builder) {
-	hintStyle := lipgloss.NewStyle().Foreground(ColorText).Italic(true)
-	keyStyle := lipgloss.NewStyle().Foreground(ColorAccent).Bold(true)
-	b.WriteString(hintStyle.Render("Fork:    "))
-	b.WriteString(keyStyle.Render("f"))
-	b.WriteString(hintStyle.Render(" quick fork, "))
-	b.WriteString(keyStyle.Render("F"))
-	b.WriteString(hintStyle.Render(" fork with options"))
-	b.WriteString("\n")
-}
-
-// renderSimpleMCPLine renders MCPs without sync status (for Gemini and other tools).
-// Width-aware truncation shows "(+N more)" when MCPs don't fit.
-func renderSimpleMCPLine(b *strings.Builder, mcpInfo *session.MCPInfo, width int) {
-	if mcpInfo == nil || !mcpInfo.HasAny() {
-		return
-	}
-
-	labelStyle := lipgloss.NewStyle().Foreground(ColorText)
-	valueStyle := lipgloss.NewStyle().Foreground(ColorText)
-
-	var mcpParts []string
-	for _, name := range mcpInfo.Global {
-		mcpParts = append(mcpParts, valueStyle.Render(name+" (g)"))
-	}
-	for _, name := range mcpInfo.Project {
-		mcpParts = append(mcpParts, valueStyle.Render(name+" (p)"))
-	}
-	for _, mcp := range mcpInfo.LocalMCPs {
-		mcpParts = append(mcpParts, valueStyle.Render(mcp.Name+" (l)"))
-	}
-
-	if len(mcpParts) == 0 {
-		return
-	}
-
-	b.WriteString(labelStyle.Render("MCPs:    "))
-
-	mcpMaxWidth := width - 4 - 9
-	if mcpMaxWidth < 20 {
-		mcpMaxWidth = 20
-	}
-
-	var mcpResult strings.Builder
-	mcpCount := 0
-	currentWidth := 0
-
-	for i, part := range mcpParts {
-		plainPart := tmux.StripANSI(part)
-		partWidth := runewidth.StringWidth(plainPart)
-
-		addedWidth := partWidth
-		if mcpCount > 0 {
-			addedWidth += 2
-		}
-
-		remaining := len(mcpParts) - i
-		isLast := remaining == 1
-
-		var wouldExceed bool
-		if isLast {
-			wouldExceed = currentWidth+addedWidth > mcpMaxWidth
-		} else {
-			moreIndicator := fmt.Sprintf(" (+%d more)", remaining)
-			moreWidth := runewidth.StringWidth(moreIndicator)
-			wouldExceed = currentWidth+addedWidth+moreWidth > mcpMaxWidth
-		}
-
-		if wouldExceed {
-			moreStyle := lipgloss.NewStyle().Foreground(ColorText).Italic(true)
-			if mcpCount > 0 {
-				mcpResult.WriteString(moreStyle.Render(fmt.Sprintf(" (+%d more)", remaining)))
-			} else {
-				mcpResult.WriteString(moreStyle.Render(fmt.Sprintf("(%d MCPs)", len(mcpParts))))
-			}
-			break
-		}
-
-		if mcpCount > 0 {
-			mcpResult.WriteString(", ")
-		}
-		mcpResult.WriteString(part)
-		currentWidth += addedWidth
-		mcpCount++
-	}
-
-	b.WriteString(mcpResult.String())
-	b.WriteString("\n")
-}
-
-// renderHelpBar renders context-aware keyboard shortcuts, adapting to terminal width
-func (h *Home) renderHelpBar() string {
-	// Route to appropriate tier based on width
-	switch {
-	case h.width < layoutBreakpointSingle:
-		return h.renderHelpBarTiny()
-	case h.width < 70:
-		return h.renderHelpBarMinimal()
-	case h.width < 100:
-		return h.renderHelpBarCompact()
-	default:
-		return h.renderHelpBarFull()
-	}
-}
-
-// renderHelpBarTiny renders minimal help for very narrow terminals (<50 cols)
-func (h *Home) renderHelpBarTiny() string {
-	borderStyle := lipgloss.NewStyle().Foreground(ColorBorder)
-	border := borderStyle.Render(strings.Repeat("─", max(0, h.width)))
-
-	hintStyle := lipgloss.NewStyle().Foreground(ColorComment)
-	hint := hintStyle.Render("? for help")
-
-	// Center the hint
-	padding := (h.width - lipgloss.Width(hint)) / 2
-	if padding < 0 {
-		padding = 0
-	}
-	content := strings.Repeat(" ", padding) + hint
-
-	raw := lipgloss.JoinVertical(lipgloss.Left, border, content)
-	return lipgloss.NewStyle().MaxWidth(h.width).Render(raw)
-}
-
-// renderHelpBarMinimal renders keys-only help for narrow terminals (50-69 cols)
-func (h *Home) renderHelpBarMinimal() string {
-	borderStyle := lipgloss.NewStyle().Foreground(ColorBorder)
-	border := borderStyle.Render(strings.Repeat("─", max(0, h.width)))
-
-	keyStyle := lipgloss.NewStyle().
-		Foreground(ColorBg).
-		Background(ColorAccent).
-		Bold(true)
-	sepStyle := lipgloss.NewStyle().Foreground(ColorBorder)
-	sep := sepStyle.Render(" │ ")
-
-	// Context-specific keys (left side)
-	var contextKeys string
-	if len(h.flatItems) == 0 {
-		contextKeys = keyStyle.Render(
-			"n",
-		) + " " + keyStyle.Render(
-			"N",
-		) + " " + keyStyle.Render(
-			"i",
-		) + " " + keyStyle.Render(
-			"g",
-		)
-	} else if h.cursor < len(h.flatItems) {
-		item := h.flatItems[h.cursor]
-		if item.Type == session.ItemTypeGroup {
-			contextKeys = keyStyle.Render("⏎") + " " + keyStyle.Render("n") + " " + keyStyle.Render("N") + " " + keyStyle.Render("g")
-		} else {
-			contextKeys = keyStyle.Render("⏎") + " " + keyStyle.Render("n") + " " + keyStyle.Render("N") + " " + keyStyle.Render("R")
-			if item.Session != nil && item.Session.CanFork() {
-				contextKeys += " " + keyStyle.Render("f")
-			}
-			if item.Session != nil && (item.Session.Tool == "claude" || item.Session.Tool == "gemini") {
-				contextKeys += " " + keyStyle.Render("m")
-			}
-			if item.Session != nil && item.Session.Tool == "claude" {
-				contextKeys += " " + keyStyle.Render("s")
-			}
-		}
-	}
-
-	// Global keys (right side)
-	globalStyle := lipgloss.NewStyle().Foreground(ColorComment)
-	globalKeys := globalStyle.Render("↑↓") + " " + globalStyle.Render("/") + " " +
-		globalStyle.Render("S") + " " + globalStyle.Render("?") + " " + globalStyle.Render("q")
-
-	// Calculate padding
-	leftPart := contextKeys
-	rightPart := globalKeys
-	padding := h.width - lipgloss.Width(leftPart) - lipgloss.Width(rightPart) - 4
-	if padding < 2 {
-		// Content too wide for one line — drop right part to avoid overflow
-		padding = 2
-		rightPart = ""
-	}
-
-	content := leftPart + sep + strings.Repeat(" ", padding) + rightPart
-
-	raw := lipgloss.JoinVertical(lipgloss.Left, border, content)
-	return lipgloss.NewStyle().MaxWidth(h.width).Render(raw)
-}
-
-// renderHelpBarCompact renders abbreviated help for medium terminals (70-99 cols)
-func (h *Home) renderHelpBarCompact() string {
-	borderStyle := lipgloss.NewStyle().Foreground(ColorBorder)
-	border := borderStyle.Render(strings.Repeat("─", max(0, h.width)))
-
-	sepStyle := lipgloss.NewStyle().Foreground(ColorBorder)
-	sep := sepStyle.Render(" │ ")
-
-	// Abbreviated key+short desc
-	var contextHints []string
-	if len(h.flatItems) == 0 {
-		contextHints = []string{
-			h.helpKeyShort("n/N", "New"),
-			h.helpKeyShort("i", "Import"),
-		}
-	} else if h.cursor < len(h.flatItems) {
-		item := h.flatItems[h.cursor]
-		if item.Type == session.ItemTypeGroup {
-			contextHints = []string{
-				h.helpKeyShort("⏎", "Toggle"),
-				h.helpKeyShort("n/N", "New"),
-			}
-		} else {
-			contextHints = []string{
-				h.helpKeyShort("⏎", "Attach"),
-				h.helpKeyShort("n/N", "New"),
-				h.helpKeyShort("R", "Restart"),
-			}
-			if item.Session != nil && item.Session.CanFork() {
-				contextHints = append(contextHints, h.helpKeyShort("f", "Fork"))
-			}
-			if item.Session != nil && (item.Session.Tool == "claude" || item.Session.Tool == "gemini") {
-				contextHints = append(contextHints, h.helpKeyShort("m", "MCP"))
-				contextHints = append(contextHints, h.helpKeyShort("v", h.previewModeShort()))
-			}
-			if item.Session != nil && item.Session.Tool == "claude" {
-				contextHints = append(contextHints, h.helpKeyShort("s", "Skills"))
-			}
-			contextHints = append(contextHints, h.helpKeyShort("c", "Copy"))
-			contextHints = append(contextHints, h.helpKeyShort("x", "Send"))
-		}
-	}
-
-	// Show undo hint when undo stack is non-empty
-	if len(h.undoStack) > 0 {
-		contextHints = append(contextHints, h.helpKeyShort("^Z", "Undo"))
-	}
-
-	// Global hints (abbreviated)
-	globalStyle := lipgloss.NewStyle().Foreground(ColorComment)
-	globalHints := globalStyle.Render("↑↓ Nav") + " " +
-		globalStyle.Render("/") + " " +
-		globalStyle.Render("S") + " " +
-		globalStyle.Render("?") + " " +
-		globalStyle.Render("q")
-
-	leftPart := strings.Join(contextHints, " ")
-	rightPart := globalHints
-	padding := h.width - lipgloss.Width(leftPart) - lipgloss.Width(rightPart) - 4
-	if padding < 2 {
-		// Content too wide for one line — drop right part to avoid overflow
-		padding = 2
-		rightPart = ""
-	}
-
-	content := leftPart + sep + strings.Repeat(" ", padding) + rightPart
-
-	raw := lipgloss.JoinVertical(lipgloss.Left, border, content)
-	return lipgloss.NewStyle().MaxWidth(h.width).Render(raw)
-}
-
-// helpKeyShort formats a compact keyboard shortcut (no padding)
-func (h *Home) helpKeyShort(key, desc string) string {
-	keyStyle := lipgloss.NewStyle().
-		Foreground(ColorBg).
-		Background(ColorAccent).
-		Bold(true)
-	descStyle := lipgloss.NewStyle().Foreground(ColorText)
-	return keyStyle.Render(key) + descStyle.Render(desc)
-}
-
-// previewModeShort returns a short description of current preview mode for help bar
-func (h *Home) previewModeShort() string {
-	switch h.previewMode {
-	case PreviewModeOutput:
-		return "Out"
-	case PreviewModeAnalytics:
-		return "Stats"
-	default:
-		return "Both"
-	}
-}
-
-// renderHelpBarFull renders context-aware keyboard shortcuts with visual grouping (100+ cols)
-func (h *Home) renderHelpBarFull() string {
-	// Separator style for grouping related actions
-	sepStyle := lipgloss.NewStyle().Foreground(ColorBorder)
-	sep := sepStyle.Render(" │ ")
-
-	// Determine context-specific hints grouped by action type
-	var primaryHints []string   // Main actions (attach, toggle, etc.)
-	var secondaryHints []string // Edit actions (rename, move, delete)
-	var contextTitle string
-
-	if len(h.flatItems) == 0 {
-		contextTitle = "Empty"
-		primaryHints = []string{
-			h.helpKey("n/N", "New/Quick"),
-			h.helpKey("i", "Import"),
-			h.helpKey("g", "Group"),
-		}
-	} else if h.cursor < len(h.flatItems) {
-		item := h.flatItems[h.cursor]
-		if item.Type == session.ItemTypeGroup {
-			contextTitle = "Group"
-			primaryHints = []string{
-				h.helpKey("Tab", "Toggle"),
-				h.helpKey("n/N", "New/Quick"),
-				h.helpKey("g", "Group"),
-			}
-			secondaryHints = []string{
-				h.helpKey("r", "Rename"),
-				h.helpKey("d", "Delete"),
-			}
-		} else {
-			contextTitle = "Session"
-			primaryHints = []string{
-				h.helpKey("Enter", "Attach"),
-				h.helpKey("n/N", "New/Quick"),
-				h.helpKey("g", "Group"),
-				h.helpKey("R", "Restart"),
-			}
-			// Only show fork hints if session has a valid Claude session ID
-			if item.Session != nil && item.Session.CanFork() {
-				primaryHints = append(primaryHints, h.helpKey("f/F", "Fork"))
-			}
-			// Show MCP Manager and preview mode toggle for Claude and Gemini sessions
-			if item.Session != nil && (item.Session.Tool == "claude" || item.Session.Tool == "gemini") {
-				primaryHints = append(primaryHints, h.helpKey("m", "MCP"))
-				primaryHints = append(primaryHints, h.helpKey("v", h.previewModeShort()))
-			}
-			if item.Session != nil && item.Session.Tool == "claude" {
-				primaryHints = append(primaryHints, h.helpKey("s", "Skills"))
-			}
-			if item.Session != nil && item.Session.IsSandboxed() {
-				primaryHints = append(primaryHints, h.helpKey("E", "Exec"))
-			}
-			primaryHints = append(primaryHints, h.helpKey("c", "Copy"))
-			primaryHints = append(primaryHints, h.helpKey("x", "Send"))
-			secondaryHints = []string{
-				h.helpKey("r", "Rename"),
-				h.helpKey("M", "Move"),
-				h.helpKey("d", "Delete"),
-			}
-		}
-	}
-
-	// Show undo hint when undo stack is non-empty
-	if len(h.undoStack) > 0 {
-		secondaryHints = append(secondaryHints, h.helpKey("^Z", "Undo"))
-	}
-
-	// Top border
-	borderStyle := lipgloss.NewStyle().Foreground(ColorBorder)
-	border := borderStyle.Render(strings.Repeat("─", max(0, h.width)))
-
-	// Context indicator with subtle styling
-	ctxStyle := lipgloss.NewStyle().
-		Foreground(ColorPurple).
-		Bold(true)
-	contextLabel := ctxStyle.Render(contextTitle + ":")
-
-	// Build shortcuts line with visual grouping
-	var shortcutsLine string
-	shortcutsLine = strings.Join(primaryHints, " ")
-	if len(secondaryHints) > 0 {
-		shortcutsLine += sep + strings.Join(secondaryHints, " ")
-	}
-
-	// Reload indicator
-	var reloadIndicator string
-	h.reloadMu.Lock()
-	reloading := h.isReloading
-	h.reloadMu.Unlock()
-	if reloading {
-		reloadStyle := lipgloss.NewStyle().
-			Foreground(ColorYellow).
-			Bold(true)
-		reloadIndicator = reloadStyle.Render("⟳ Reloading...")
-	}
-
-	// Global shortcuts (right side) - more compact with separators
-	globalStyle := lipgloss.NewStyle().Foreground(ColorComment)
-	globalHints := globalStyle.Render("↑↓ Nav") + sep +
-		globalStyle.Render("/ Search  G Global") + sep +
-		globalStyle.Render("S Settings  ? Help  q Quit")
-
-	// Calculate spacing between left (context) and right (global) portions
-	leftPart := contextLabel + " " + shortcutsLine
-	if reloadIndicator != "" {
-		leftPart = reloadIndicator + sep + leftPart
-	}
-	rightPart := globalHints
-	padding := h.width - lipgloss.Width(leftPart) - lipgloss.Width(rightPart) - spacingNormal
-	if padding < spacingNormal {
-		// Content too wide for one line — drop right part to avoid overflow
-		padding = spacingNormal
-		rightPart = ""
-	}
-
-	helpContent := leftPart + strings.Repeat(" ", padding) + rightPart
-
-	raw := lipgloss.JoinVertical(lipgloss.Left, border, helpContent)
-	return lipgloss.NewStyle().MaxWidth(h.width).Render(raw)
-}
-
-// helpKey formats a keyboard shortcut for the help bar
-func (h *Home) helpKey(key, desc string) string {
-	keyStyle := lipgloss.NewStyle().
-		Foreground(ColorBg).
-		Background(ColorAccent).
-		Bold(true).
-		Padding(0, 1)
-	descStyle := lipgloss.NewStyle().Foreground(ColorText)
-	return keyStyle.Render(key) + " " + descStyle.Render(desc)
-}
-
-// renderSessionList renders the left panel with hierarchical session list
-func (h *Home) renderSessionList(width, height int) string {
-	var b strings.Builder
-
-	if len(h.flatItems) == 0 {
-		// Responsive empty state - adapts to available space
-		// Account for border (2 chars each side) when calculating content area
-		contentWidth := width - 4
-		contentHeight := height - 2
-		if contentWidth < 10 {
-			contentWidth = 10
-		}
-		if contentHeight < 5 {
-			contentHeight = 5
-		}
-
-		emptyContent := renderEmptyStateResponsive(EmptyStateConfig{
-			Icon:     "⬡",
-			Title:    "No Sessions Yet",
-			Subtitle: "Get started by creating your first session",
-			Hints: []string{
-				"Press n to create a new session",
-				"Press i to import existing tmux sessions",
-				"Press g to create a group",
-			},
-		}, contentWidth, contentHeight)
-
-		return lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(ColorBorder).
-			Render(emptyContent)
-	}
-
-	// Render items starting from viewOffset
-	visibleCount := 0
-	maxVisible := height - 1 // Leave room for scrolling indicator
-	if maxVisible < 1 {
-		maxVisible = 1
-	}
-
-	// Show "more above" indicator if scrolled down
-	if h.viewOffset > 0 {
-		b.WriteString(DimStyle.Render(fmt.Sprintf("  ⋮ +%d above", h.viewOffset)))
-		b.WriteString("\n")
-		maxVisible-- // Account for the indicator line
-	}
-
-	for i := h.viewOffset; i < len(h.flatItems) && visibleCount < maxVisible; i++ {
-		item := h.flatItems[i]
-		h.renderItem(&b, item, i == h.cursor, i)
-		visibleCount++
-	}
-
-	// Show "more below" indicator if there are more items
-	remaining := len(h.flatItems) - (h.viewOffset + visibleCount)
-	if remaining > 0 {
-		b.WriteString(DimStyle.Render(fmt.Sprintf("  ⋮ +%d below", remaining)))
-	}
-
-	// Height padding is handled by ensureExactHeight() in View() for consistency
-	return b.String()
-}
-
-// renderItem renders a single item (group or session) for the left panel
-func (h *Home) renderItem(b *strings.Builder, item session.Item, selected bool, itemIndex int) {
-	if item.Type == session.ItemTypeGroup {
-		h.renderGroupItem(b, item, selected, itemIndex)
-	} else {
-		h.renderSessionItem(b, item, selected)
-	}
-}
-
-// renderGroupItem renders a group header
-// PERFORMANCE: Uses cached styles from styles.go to avoid allocations
-func (h *Home) renderGroupItem(b *strings.Builder, item session.Item, selected bool, itemIndex int) {
-	group := item.Group
-
-	// Calculate indentation based on nesting level (no tree lines, just spaces)
-	// Uses spacingNormal (2 chars) per level for consistent hierarchy visualization
-	indent := strings.Repeat(strings.Repeat(" ", spacingNormal), max(0, item.Level))
-
-	// Expand/collapse indicator with filled triangles (using cached styles)
-	var expandIcon string
-	if selected {
-		if group.Expanded {
-			expandIcon = GroupExpandSelStyle.Render("▾")
-		} else {
-			expandIcon = GroupExpandSelStyle.Render("▸")
-		}
-	} else {
-		if group.Expanded {
-			expandIcon = GroupExpandStyle.Render("▾") // Filled triangle for expanded
-		} else {
-			expandIcon = GroupExpandStyle.Render("▸") // Filled triangle for collapsed
-		}
-	}
-
-	// Hotkey indicator (subtle, only for root groups, hidden when selected)
-	// Uses pre-computed RootGroupNum from rebuildFlatItems() - O(1) lookup instead of O(n) loop
-	hotkeyStr := ""
-	if item.Level == 0 && !selected {
-		if item.RootGroupNum >= 1 && item.RootGroupNum <= 9 {
-			hotkeyStr = GroupHotkeyStyle.Render(fmt.Sprintf("%d·", item.RootGroupNum))
-		}
-	}
-
-	// Select appropriate cached styles based on selection state
-	nameStyle := GroupNameStyle
-	countStyle := GroupCountStyle
-	if selected {
-		nameStyle = GroupNameSelStyle
-		countStyle = GroupCountSelStyle
-	}
-
-	// Use recursive count to include sessions in subgroups (Issue #48)
-	sessionCount := h.groupTree.SessionCountForGroup(group.Path)
-	countStr := countStyle.Render(fmt.Sprintf(" (%d)", sessionCount))
-
-	// Status indicators (compact, on same line) using cached styles
-	// Also count recursively for subgroups
-	running := 0
-	waiting := 0
-	for path, g := range h.groupTree.Groups {
-		if path == group.Path || strings.HasPrefix(path, group.Path+"/") {
-			for _, sess := range g.Sessions {
-				switch sess.Status {
-				case session.StatusRunning:
-					running++
-				case session.StatusWaiting:
-					waiting++
-				}
-			}
-		}
-	}
-
-	statusStr := ""
-	if running > 0 {
-		statusStr += " " + GroupStatusRunning.Render(fmt.Sprintf("● %d", running))
-	}
-	if waiting > 0 {
-		statusStr += " " + GroupStatusWaiting.Render(fmt.Sprintf("◐ %d", waiting))
-	}
-
-	// Build the row: [indent][hotkey][expand] [name](count) [status]
-	row := fmt.Sprintf(
-		"%s%s%s %s%s%s",
-		indent,
-		hotkeyStr,
-		expandIcon,
-		nameStyle.Render(group.Name),
-		countStr,
-		statusStr,
-	)
-	b.WriteString(row)
-	b.WriteString("\n")
-}
-
-// Tree drawing characters for visual hierarchy
-const (
-	treeBranch = "├─" // Mid-level item (has siblings below)
-	treeLast   = "└─" // Last item in group (no siblings below)
-	treeLine   = "│ " // Continuation line
-	treeEmpty  = "  " // Empty space (for alignment)
-	// Sub-session connectors (nested under parent)
-	subBranch = "├─" // Sub-session with siblings below
-	subLast   = "└─" // Last sub-session
-)
-
-// renderSessionItem renders a single session item for the left panel
-// PERFORMANCE: Uses cached styles from styles.go to avoid allocations
-func (h *Home) renderSessionItem(b *strings.Builder, item session.Item, selected bool) {
-	inst := item.Session
-
-	// Snapshot status and tool under read lock to avoid races with background worker
-	instStatus := inst.GetStatusThreadSafe()
-	instTool := inst.GetToolThreadSafe()
-
-	// Tree style for connectors - Use ColorText for clear visibility of box-drawing characters
-	treeStyle := TreeConnectorStyle
-
-	// Calculate base indentation for parent levels
-	// Level 1 means direct child of root group, Level 2 means child of nested group, etc.
-	baseIndent := ""
-	if item.Level > 1 {
-		// For deeply nested items, add spacing for parent levels
-		// Sub-sessions get extra indentation (they're at Level = groupLevel + 2)
-		if item.IsSubSession {
-			// Sub-session: indent for group level, then continuation line for parent
-			// Add leading space so │ aligns with ├ in regular items (both at position 1)
-			groupIndent := strings.Repeat(treeEmpty, item.Level-2)
-			if item.ParentIsLastInGroup {
-				baseIndent = groupIndent + "  " // 2 spaces - parent is last, no continuation needed
-			} else {
-				// Style the │ character - leading space aligns │ with ├ above
-				baseIndent = groupIndent + " " + treeStyle.Render("│")
-			}
-		} else {
-			baseIndent = strings.Repeat(treeEmpty, item.Level-1)
-		}
-	}
-
-	// Tree connector: └─ for last item, ├─ for others
-	treeConnector := treeBranch
-	if item.IsSubSession {
-		// Sub-session uses its own last-in-group logic
-		if item.IsLastSubSession {
-			treeConnector = subLast
-		} else {
-			treeConnector = subBranch
-		}
-	} else if item.IsLastInGroup {
-		treeConnector = treeLast
-	}
-
-	// Status indicator with consistent sizing
-	var statusIcon string
-	var statusStyle lipgloss.Style
-	switch instStatus {
-	case session.StatusRunning:
-		statusIcon = "●"
-		statusStyle = SessionStatusRunning
-	case session.StatusWaiting:
-		statusIcon = "◐"
-		statusStyle = SessionStatusWaiting
-	case session.StatusIdle:
-		statusIcon = "○"
-		statusStyle = SessionStatusIdle
-	case session.StatusError:
-		statusIcon = "✕"
-		statusStyle = SessionStatusError
-	default:
-		statusIcon = "○"
-		statusStyle = SessionStatusIdle
-	}
-
-	status := statusStyle.Render(statusIcon)
-
-	// Title styling - add bold/underline for accessibility (colorblind users)
-	var titleStyle lipgloss.Style
-	switch instStatus {
-	case session.StatusRunning, session.StatusWaiting:
-		// Bold for active states (distinguishable without color)
-		titleStyle = SessionTitleActive
-	case session.StatusError:
-		// Underline for error (distinguishable without color)
-		titleStyle = SessionTitleError
-	default:
-		titleStyle = SessionTitleDefault
-	}
-
-	// Tool badge with brand-specific color
-	// Claude=orange, Gemini=purple, Codex=cyan, Aider=red
-	toolStyle := GetToolStyle(instTool)
-
-	// Selection indicator
-	selectionPrefix := " "
-	if selected {
-		selectionPrefix = SessionSelectionPrefix.Render("▶")
-		titleStyle = SessionTitleSelStyle
-		toolStyle = SessionStatusSelStyle
-		statusStyle = SessionStatusSelStyle
-		status = statusStyle.Render(statusIcon)
-		// Tree connector also gets selection styling
-		treeStyle = TreeConnectorSelStyle
-		// Rebuild baseIndent with selection styling for sub-sessions
-		if item.IsSubSession && !item.ParentIsLastInGroup {
-			groupIndent := strings.Repeat(treeEmpty, max(0, item.Level-2))
-			baseIndent = groupIndent + " " + treeStyle.Render("│")
-		}
-	}
-
-	title := titleStyle.Render(inst.Title)
-	tool := toolStyle.Render(" " + instTool)
-
-	// YOLO badge for Gemini sessions with YOLO mode enabled
-	yoloBadge := ""
-	if instTool == "gemini" && inst.GeminiYoloMode != nil && *inst.GeminiYoloMode {
-		yoloStyle := lipgloss.NewStyle().Foreground(ColorYellow).Bold(true)
-		if selected {
-			yoloStyle = SessionStatusSelStyle
-		}
-		yoloBadge = yoloStyle.Render(" [YOLO]")
-	}
-
-	// Worktree branch badge for sessions running in git worktrees.
-	worktreeBadge := ""
-	if inst.IsWorktree() && inst.WorktreeBranch != "" {
-		branch := inst.WorktreeBranch
-		if len(branch) > 15 {
-			branch = branch[:12] + "..."
-		}
-		wtStyle := lipgloss.NewStyle().Foreground(ColorCyan)
-		if selected {
-			wtStyle = SessionStatusSelStyle
-		}
-		worktreeBadge = wtStyle.Render(" [" + branch + "]")
-	}
-
-	// Sandbox badge for containerized sessions.
-	sandboxBadge := ""
-	if inst.IsSandboxed() {
-		sbStyle := lipgloss.NewStyle().Foreground(ColorCyan)
-		if selected {
-			sbStyle = SessionStatusSelStyle
-		}
-		sandboxBadge = sbStyle.Render(" [sandbox]")
-	}
-
-	// Vagrant mode badge
-	vagrantBadge := ""
-	if inst.IsVagrantMode() {
-		vStyle := lipgloss.NewStyle().Foreground(ColorBlue).Bold(true)
-		if selected {
-			vStyle = SessionStatusSelStyle
-		}
-		vagrantBadge = vStyle.Render(" [Vagrant]")
-	}
-
-	// Build row: [baseIndent][selection][tree][status] [title] [tool] [yolo] [worktree] [sandbox] [vagrant]
-	// Format: " ├─ ● session-name tool" or "▶└─ ● session-name tool"
-	// Sub-sessions get extra indent: "   ├─◐ sub-session tool"
-	row := fmt.Sprintf(
-		"%s%s%s %s %s%s%s%s%s%s",
-		baseIndent,
-		selectionPrefix,
-		treeStyle.Render(treeConnector),
-		status,
-		title,
-		tool,
-		yoloBadge,
-		worktreeBadge,
-		sandboxBadge,
-		vagrantBadge,
-	)
-	b.WriteString(row)
-	b.WriteString("\n")
-}
-
-// renderLaunchingState renders the animated launching/resuming indicator for sessions
-func (h *Home) renderLaunchingState(inst *session.Instance, width int, startTime time.Time) string {
-	var b strings.Builder
-
-	// Check if this is a resume operation (vs new launch)
-	_, isResuming := h.resumingSessions[inst.ID]
-
-	// Braille spinner frames - creates smooth rotation effect
-	spinnerFrames := []string{"⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"}
-	spinner := spinnerFrames[h.animationFrame]
-
-	// Tool-specific messaging with emoji
-	var toolName, toolDesc, emoji string
-	if isResuming {
-		emoji = "🔄"
-	} else {
-		emoji = "🚀"
-	}
-
-	switch inst.Tool {
-	case "claude":
-		toolName = "Claude Code"
-		if isResuming {
-			toolDesc = "Resuming Claude session..."
-		} else {
-			toolDesc = "Starting Claude session..."
-		}
-	case "gemini":
-		toolName = "Gemini"
-		if isResuming {
-			toolDesc = "Resuming Gemini session..."
-		} else {
-			toolDesc = "Connecting to Gemini..."
-		}
-	case "aider":
-		toolName = "Aider"
-		if isResuming {
-			toolDesc = "Resuming Aider session..."
-		} else {
-			toolDesc = "Starting Aider..."
-		}
-	case "codex":
-		toolName = "Codex"
-		if isResuming {
-			toolDesc = "Resuming Codex session..."
-		} else {
-			toolDesc = "Starting Codex..."
-		}
-	case "opencode":
-		toolName = "OpenCode"
-		if isResuming {
-			toolDesc = "Resuming OpenCode session..."
-		} else {
-			toolDesc = "Starting OpenCode..."
-		}
-	default:
-		toolName = "Shell"
-		if isResuming {
-			toolDesc = "Resuming shell session..."
-		} else {
-			toolDesc = "Launching shell session..."
-		}
-	}
-
-	// Centered layout
-	centerStyle := lipgloss.NewStyle().
-		Width(width - 4).
-		Align(lipgloss.Center)
-
-	// Spinner with tool color
-	spinnerStyle := lipgloss.NewStyle().
-		Foreground(ColorAccent).
-		Bold(true)
-	spinnerLine := spinnerStyle.Render(spinner + "  " + spinner + "  " + spinner)
-	b.WriteString(centerStyle.Render(spinnerLine))
-	b.WriteString("\n\n")
-
-	// Title with emoji
-	titleStyle := lipgloss.NewStyle().
-		Foreground(ColorPurple).
-		Bold(true)
-	var actionVerb string
-	if isResuming {
-		actionVerb = "Resuming"
-	} else {
-		actionVerb = "Launching"
-	}
-	b.WriteString(centerStyle.Render(titleStyle.Render(emoji + " " + actionVerb + " " + toolName)))
-	b.WriteString("\n\n")
-
-	// Description
-	descStyle := lipgloss.NewStyle().
-		Foreground(ColorText).
-		Italic(true)
-	b.WriteString(centerStyle.Render(descStyle.Render(toolDesc)))
-	b.WriteString("\n\n")
-
-	// Progress dots animation
-	dotsCount := (h.animationFrame % 4) + 1
-	dots := strings.Repeat("●", dotsCount) + strings.Repeat("○", 4-dotsCount)
-	dotsStyle := lipgloss.NewStyle().
-		Foreground(ColorAccent)
-	b.WriteString(centerStyle.Render(dotsStyle.Render(dots)))
-	b.WriteString("\n\n")
-
-	// Elapsed time (consistent with MCP and Fork animations)
-	elapsed := time.Since(startTime).Round(time.Second)
-	timeStyle := lipgloss.NewStyle().
-		Foreground(ColorYellow).
-		Italic(true)
-	b.WriteString(centerStyle.Render(timeStyle.Render(fmt.Sprintf("Loading... %s", elapsed))))
-
-	return b.String()
-}
-
-// renderPendingVagrantBoot renders a yellow-themed boot animation for Vagrant VM provisioning.
-// This shows BEFORE the session instance exists, providing immediate feedback during `vagrant up`.
-func (h *Home) renderPendingVagrantBoot(width int) string {
-	var b strings.Builder
-
-	// Braille spinner frames - creates smooth rotation effect
-	spinnerFrames := []string{"⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"}
-	spinner := spinnerFrames[h.animationFrame]
-
-	// Centered layout
-	centerStyle := lipgloss.NewStyle().
-		Width(width - 4).
-		Align(lipgloss.Center)
-
-	// Spinner with yellow color (Vagrant-themed)
-	spinnerStyle := lipgloss.NewStyle().
-		Foreground(ColorYellow).
-		Bold(true)
-	spinnerLine := spinnerStyle.Render(spinner + "  " + spinner + "  " + spinner)
-	b.WriteString(centerStyle.Render(spinnerLine))
-	b.WriteString("\n\n")
-
-	// Title with emoji
-	titleStyle := lipgloss.NewStyle().
-		Foreground(ColorYellow).
-		Bold(true)
-	b.WriteString(centerStyle.Render(titleStyle.Render("🖥️  Booting Vagrant VM")))
-	b.WriteString("\n\n")
-
-	// Description
-	descStyle := lipgloss.NewStyle().
-		Foreground(ColorText).
-		Italic(true)
-	b.WriteString(centerStyle.Render(descStyle.Render("Provisioning isolated environment...")))
-	b.WriteString("\n\n")
-
-	// Progress dots animation
-	dotsCount := (h.animationFrame % 4) + 1
-	dots := strings.Repeat("●", dotsCount) + strings.Repeat("○", 4-dotsCount)
-	dotsStyle := lipgloss.NewStyle().
-		Foreground(ColorOrange)
-	b.WriteString(centerStyle.Render(dotsStyle.Render(dots)))
-	b.WriteString("\n\n")
-
-	// Session name hint
-	if h.pendingVagrantBoot.name != "" {
-		nameStyle := lipgloss.NewStyle().
-			Foreground(ColorTextDim)
-		b.WriteString(centerStyle.Render(nameStyle.Render("Session: " + h.pendingVagrantBoot.name)))
-		b.WriteString("\n\n")
-	}
-
-	// Elapsed time
-	elapsed := time.Since(h.pendingVagrantBoot.startTime).Round(time.Second)
-	timeStyle := lipgloss.NewStyle().
-		Foreground(ColorYellow).
-		Italic(true)
-	b.WriteString(centerStyle.Render(timeStyle.Render(fmt.Sprintf("Booting... %s", elapsed))))
-
-	return b.String()
-}
-
-// renderMcpLoadingState renders the MCP loading animation in the preview pane
-func (h *Home) renderMcpLoadingState(inst *session.Instance, width int, startTime time.Time) string {
-	var b strings.Builder
-
-	// Braille spinner frames - creates smooth rotation effect
-	spinnerFrames := []string{"⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"}
-	spinner := spinnerFrames[h.animationFrame]
-
-	// Centered layout
-	centerStyle := lipgloss.NewStyle().
-		Width(width - 4).
-		Align(lipgloss.Center)
-
-	// Spinner with cyan color (MCP-themed)
-	spinnerStyle := lipgloss.NewStyle().
-		Foreground(ColorCyan).
-		Bold(true)
-	spinnerLine := spinnerStyle.Render(spinner + "  " + spinner + "  " + spinner)
-	b.WriteString(centerStyle.Render(spinnerLine))
-	b.WriteString("\n\n")
-
-	// MCP loading title
-	titleStyle := lipgloss.NewStyle().
-		Foreground(ColorCyan).
-		Bold(true)
-	b.WriteString(centerStyle.Render(titleStyle.Render("🔌 Reloading MCPs")))
-	b.WriteString("\n\n")
-
-	// Description
-	descStyle := lipgloss.NewStyle().
-		Foreground(ColorText).
-		Italic(true)
-	b.WriteString(centerStyle.Render(descStyle.Render("Restarting session with updated MCP configuration...")))
-	b.WriteString("\n\n")
-
-	// Progress dots animation
-	dotsCount := (h.animationFrame % 4) + 1
-	dots := strings.Repeat("●", dotsCount) + strings.Repeat("○", 4-dotsCount)
-	dotsStyle := lipgloss.NewStyle().
-		Foreground(ColorCyan)
-	b.WriteString(centerStyle.Render(dotsStyle.Render(dots)))
-	b.WriteString("\n\n")
-
-	// Elapsed time
-	elapsed := time.Since(startTime).Round(time.Second)
-	timeStyle := lipgloss.NewStyle().
-		Foreground(ColorYellow).
-		Italic(true)
-	b.WriteString(centerStyle.Render(timeStyle.Render(fmt.Sprintf("Loading... %s", elapsed))))
-
-	return b.String()
-}
-
-// renderForkingState renders the forking animation when session is being forked
-func (h *Home) renderForkingState(inst *session.Instance, width int, startTime time.Time) string {
-	var b strings.Builder
-
-	// Centered layout
-	centerStyle := lipgloss.NewStyle().
-		Width(width - 4).
-		Align(lipgloss.Center)
-
-	// Braille spinner frames
-	spinnerFrames := []string{"⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"}
-	spinner := spinnerFrames[h.animationFrame]
-
-	// Spinner with purple color (fork-themed)
-	spinnerStyle := lipgloss.NewStyle().
-		Foreground(ColorPurple).
-		Bold(true)
-	spinnerLine := spinnerStyle.Render(spinner + "  " + spinner + "  " + spinner)
-	b.WriteString(centerStyle.Render(spinnerLine))
-	b.WriteString("\n\n")
-
-	// Forking title
-	titleStyle := lipgloss.NewStyle().
-		Foreground(ColorPurple).
-		Bold(true)
-	b.WriteString(centerStyle.Render(titleStyle.Render("🔀 Forking Session")))
-	b.WriteString("\n\n")
-
-	// Description
-	descStyle := lipgloss.NewStyle().
-		Foreground(ColorText).
-		Italic(true)
-	b.WriteString(centerStyle.Render(descStyle.Render("Creating a new Claude session from this conversation...")))
-	b.WriteString("\n\n")
-
-	// Progress dots animation
-	dotsCount := (h.animationFrame % 4) + 1
-	dots := strings.Repeat("●", dotsCount) + strings.Repeat("○", 4-dotsCount)
-	dotsStyle := lipgloss.NewStyle().
-		Foreground(ColorPurple)
-	b.WriteString(centerStyle.Render(dotsStyle.Render(dots)))
-	b.WriteString("\n\n")
-
-	// Elapsed time (consistent with other animations)
-	elapsed := time.Since(startTime).Round(time.Second)
-	timeStyle := lipgloss.NewStyle().
-		Foreground(ColorYellow).
-		Italic(true)
-	b.WriteString(centerStyle.Render(timeStyle.Render(fmt.Sprintf("Loading... %s", elapsed))))
-
-	return b.String()
-}
-
-// renderSessionInfoCard renders a simple session info card as fallback view
-// Used when both show_output and show_analytics are disabled
-func (h *Home) renderSessionInfoCard(inst *session.Instance, width, height int) string {
-	if inst == nil {
-		dimStyle := lipgloss.NewStyle().Foreground(ColorTextDim).Italic(true)
-		return dimStyle.Render("No session selected")
-	}
-
-	var b strings.Builder
-
-	// Snapshot status/tool under read lock for thread safety
-	cardStatus := inst.GetStatusThreadSafe()
-	cardTool := inst.GetToolThreadSafe()
-
-	// Header with tool icon
-	icon := ToolIcon(cardTool)
-	header := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(ColorAccent).
-		Render(fmt.Sprintf("%s %s", icon, inst.Title))
-	b.WriteString(header)
-	b.WriteString("\n")
-	b.WriteString(strings.Repeat("─", max(0, min(width-4, 40))))
-	b.WriteString("\n\n")
-
-	labelStyle := lipgloss.NewStyle().Foreground(ColorTextDim)
-	valueStyle := lipgloss.NewStyle().Foreground(ColorText)
-
-	// Path
-	b.WriteString(fmt.Sprintf("%s %s\n", labelStyle.Render("Path:"), valueStyle.Render(inst.ProjectPath)))
-
-	// Status with color
-	var statusColor lipgloss.Color
-	switch cardStatus {
-	case session.StatusRunning:
-		statusColor = ColorGreen
-	case session.StatusWaiting:
-		statusColor = ColorYellow
-	case session.StatusError:
-		statusColor = ColorRed
-	default:
-		statusColor = ColorTextDim
-	}
-	statusStyle := lipgloss.NewStyle().Foreground(statusColor)
-	b.WriteString(fmt.Sprintf("%s %s\n", labelStyle.Render("Status:"), statusStyle.Render(string(cardStatus))))
-
-	// Tool
-	b.WriteString(fmt.Sprintf("%s %s\n", labelStyle.Render("Tool:"), valueStyle.Render(cardTool)))
-
-	// Session ID (if available) - Claude, Gemini, or OpenCode
-	sessionID := inst.ClaudeSessionID
-	if sessionID == "" {
-		sessionID = inst.GeminiSessionID
-	}
-	if sessionID == "" {
-		sessionID = inst.OpenCodeSessionID
-	}
-	if sessionID != "" {
-		shortID := sessionID
-		if len(shortID) > 12 {
-			shortID = shortID[:12] + "..."
-		}
-		b.WriteString(fmt.Sprintf("%s %s\n", labelStyle.Render("Session:"), valueStyle.Render(shortID)))
-	}
-
-	// Created date
-	b.WriteString(
-		fmt.Sprintf("%s %s\n", labelStyle.Render("Created:"), valueStyle.Render(inst.CreatedAt.Format("Jan 2 15:04"))),
-	)
-
-	return b.String()
-}
-
-// renderPreviewPane renders the right panel with live preview
-func (h *Home) renderPreviewPane(width, height int) string {
-	var b strings.Builder
-
-	if len(h.flatItems) == 0 || h.cursor >= len(h.flatItems) {
-		// Show different message when there are no sessions vs just no selection
-		if len(h.flatItems) == 0 {
-			return renderEmptyStateResponsive(EmptyStateConfig{
-				Icon:     "✦",
-				Title:    "Ready to Go",
-				Subtitle: "Your workspace is set up",
-				Hints: []string{
-					"Press n to create your first session",
-					"Press i to import tmux sessions",
-				},
-			}, width, height)
-		}
-		return renderEmptyStateResponsive(EmptyStateConfig{
-			Icon:     "◇",
-			Title:    "No Selection",
-			Subtitle: "Select a session to preview",
-			Hints:    nil,
-		}, width, height)
-	}
-
-	// Pending vagrant boot animation (shows before session is created)
-	if h.pendingVagrantBoot != nil {
-		return h.renderPendingVagrantBoot(width)
-	}
-
-	item := h.flatItems[h.cursor]
-
-	// If group is selected, show group info
-	if item.Type == session.ItemTypeGroup {
-		return h.renderGroupPreview(item.Group, width, height)
-	}
-
-	// Session preview
-	selected := item.Session
-
-	// Session info header box
-	statusIcon := "○"
-	statusColor := ColorTextDim
-	switch selected.Status {
-	case session.StatusRunning:
-		statusIcon = "●"
-		statusColor = ColorGreen
-	case session.StatusWaiting:
-		statusIcon = "◐"
-		statusColor = ColorYellow
-	case session.StatusError:
-		statusIcon = "✕"
-		statusColor = ColorRed
-	}
-
-	// Header with session name and status
-	statusBadge := lipgloss.NewStyle().Foreground(statusColor).Render(statusIcon + " " + string(selected.Status))
-	nameStyle := lipgloss.NewStyle().Bold(true).Foreground(ColorAccent)
-	b.WriteString(nameStyle.Render(selected.Title))
-	b.WriteString("  ")
-	b.WriteString(statusBadge)
-	b.WriteString("\n")
-
-	// Info lines: path and activity time
-	infoStyle := lipgloss.NewStyle().Foreground(ColorText)
-	pathStr := truncatePath(selected.ProjectPath, width-4)
-	b.WriteString(infoStyle.Render("📁 " + pathStr))
-	b.WriteString("\n")
-
-	// Activity time - shows when session was last active
-	activityTime := selected.GetLastActivityTime()
-	activityStr := formatRelativeTime(activityTime)
-	if selected.Status == session.StatusRunning {
-		activityStr = "active now"
-	}
-	b.WriteString(infoStyle.Render("⏱ " + activityStr))
-	b.WriteString("\n")
-
-	toolBadge := lipgloss.NewStyle().
-		Foreground(ColorBg).
-		Background(ColorPurple).
-		Padding(0, 1).
-		Render(selected.Tool)
-	groupBadge := lipgloss.NewStyle().
-		Foreground(ColorBg).
-		Background(ColorCyan).
-		Padding(0, 1).
-		Render(selected.GroupPath)
-	b.WriteString(toolBadge)
-	b.WriteString(" ")
-	b.WriteString(groupBadge)
-	if selected.IsVagrantMode() {
-		vagrantBadge := lipgloss.NewStyle().
-			Foreground(ColorBg).
-			Background(ColorBlue).
-			Padding(0, 1).
-			Render("Vagrant")
-		b.WriteString(" ")
-		b.WriteString(vagrantBadge)
-	}
-	b.WriteString("\n")
-
-	// Worktree info section (for sessions running in git worktrees)
-	if selected.IsWorktree() {
-		wtHeader := renderSectionDivider("Worktree", width-4)
-		b.WriteString(wtHeader)
-		b.WriteString("\n")
-
-		wtLabelStyle := lipgloss.NewStyle().Foreground(ColorText)
-		wtBranchStyle := lipgloss.NewStyle().Foreground(ColorCyan).Bold(true)
-		wtValueStyle := lipgloss.NewStyle().Foreground(ColorText)
-		wtHintStyle := lipgloss.NewStyle().Foreground(ColorText).Italic(true)
-		wtKeyStyle := lipgloss.NewStyle().Foreground(ColorAccent).Bold(true)
-
-		// Branch
-		if selected.WorktreeBranch != "" {
-			b.WriteString(wtLabelStyle.Render("Branch:  "))
-			b.WriteString(wtBranchStyle.Render(selected.WorktreeBranch))
-			b.WriteString("\n")
-		}
-
-		// Repo root (truncated)
-		if selected.WorktreeRepoRoot != "" {
-			repoPath := truncatePath(selected.WorktreeRepoRoot, width-4-9)
-			b.WriteString(wtLabelStyle.Render("Repo:    "))
-			b.WriteString(wtValueStyle.Render(repoPath))
-			b.WriteString("\n")
-		}
-
-		// Worktree path (truncated)
-		if selected.WorktreePath != "" {
-			wtPath := truncatePath(selected.WorktreePath, width-4-9)
-			b.WriteString(wtLabelStyle.Render("Path:    "))
-			b.WriteString(wtValueStyle.Render(wtPath))
-			b.WriteString("\n")
-		}
-
-		// Dirty status (lazy-cached, fetched via previewDebounce handler with 10s TTL)
-		h.worktreeDirtyMu.Lock()
-		isDirty, hasCached := h.worktreeDirtyCache[selected.ID]
-		h.worktreeDirtyMu.Unlock()
-
-		dirtyLabel := "checking..."
-		dirtyStyle := wtValueStyle
-		if hasCached {
-			if isDirty {
-				dirtyLabel = "dirty (uncommitted changes)"
-				dirtyStyle = lipgloss.NewStyle().Foreground(ColorYellow)
-			} else {
-				dirtyLabel = "clean"
-				dirtyStyle = lipgloss.NewStyle().Foreground(ColorGreen)
-			}
-		}
-		b.WriteString(wtLabelStyle.Render("Status:  "))
-		b.WriteString(dirtyStyle.Render(dirtyLabel))
-		b.WriteString("\n")
-
-		// Finish hint
-		b.WriteString(wtHintStyle.Render("Finish:  "))
-		b.WriteString(wtKeyStyle.Render("W"))
-		b.WriteString(wtHintStyle.Render(" merge + cleanup"))
-		b.WriteString("\n")
-	}
-
-	// Claude-specific info (session ID and MCPs)
-	if selected.Tool == "claude" {
-		// Section divider for Claude info
-		claudeHeader := renderSectionDivider("Claude", width-4)
-		b.WriteString(claudeHeader)
-		b.WriteString("\n")
-
-		labelStyle := lipgloss.NewStyle().Foreground(ColorText)
-		valueStyle := lipgloss.NewStyle().Foreground(ColorText)
-
-		// Status line
-		if selected.ClaudeSessionID != "" {
-			statusStyle := lipgloss.NewStyle().Foreground(ColorGreen).Bold(true)
-			b.WriteString(labelStyle.Render("Status:  "))
-			b.WriteString(statusStyle.Render("● Connected"))
-			b.WriteString("\n")
-
-			// Full session ID on its own line
-			b.WriteString(labelStyle.Render("Session: "))
-			b.WriteString(valueStyle.Render(selected.ClaudeSessionID))
-			b.WriteString("\n")
-		} else {
-			statusStyle := lipgloss.NewStyle().Foreground(ColorText)
-			b.WriteString(labelStyle.Render("Status:  "))
-			b.WriteString(statusStyle.Render("○ Not connected"))
-			b.WriteString("\n")
-		}
-
-		// MCP servers - compact format with source indicators and sync status
-		mcpInfo := selected.GetMCPInfo()
-		hasLoadedMCPs := len(selected.LoadedMCPNames) > 0
-		hasMCPs := mcpInfo != nil && mcpInfo.HasAny()
-
-		if hasMCPs || hasLoadedMCPs {
-			b.WriteString(labelStyle.Render("MCPs:    "))
-
-			// Build set of loaded MCPs for comparison
-			loadedSet := make(map[string]bool)
-			for _, name := range selected.LoadedMCPNames {
-				loadedSet[name] = true
-			}
-
-			// Build set of current MCPs (from config)
-			currentSet := make(map[string]bool)
-			if mcpInfo != nil {
-				for _, name := range mcpInfo.Global {
-					currentSet[name] = true
-				}
-				for _, name := range mcpInfo.Project {
-					currentSet[name] = true
-				}
-				for _, mcp := range mcpInfo.LocalMCPs {
-					currentSet[mcp.Name] = true
-				}
-			}
-
-			// Styles for different MCP states
-			pendingStyle := lipgloss.NewStyle().Foreground(ColorYellow)
-			staleStyle := lipgloss.NewStyle().Foreground(ColorText)
-
-			var mcpParts []string
-
-			// Helper to add MCP with appropriate styling
-			addMCP := func(name, source string) {
-				label := name + " (" + source + ")"
-				if !hasLoadedMCPs {
-					// Old session without LoadedMCPNames - show all as normal (no sync info)
-					mcpParts = append(mcpParts, valueStyle.Render(label))
-				} else if loadedSet[name] {
-					// In both loaded and current - active (normal style)
-					mcpParts = append(mcpParts, valueStyle.Render(label))
-				} else {
-					// In current but not loaded - pending (needs restart)
-					mcpParts = append(mcpParts, pendingStyle.Render(label+" ⟳"))
-				}
-			}
-
-			// Add MCPs from current config with source indicators
-			if mcpInfo != nil {
-				for _, name := range mcpInfo.Global {
-					addMCP(name, "g")
-				}
-				for _, name := range mcpInfo.Project {
-					addMCP(name, "p")
-				}
-				for _, mcp := range mcpInfo.LocalMCPs {
-					// Show source path if different from project path
-					sourceIndicator := "l"
-					if mcp.SourcePath != selected.ProjectPath {
-						// Show abbreviated path (just directory name)
-						sourceIndicator = "l:" + filepath.Base(mcp.SourcePath)
-					}
-					addMCP(mcp.Name, sourceIndicator)
-				}
-			}
-
-			// Add stale MCPs (loaded but no longer in config)
-			if hasLoadedMCPs {
-				for _, name := range selected.LoadedMCPNames {
-					if !currentSet[name] {
-						// Still running but removed from config
-						mcpParts = append(mcpParts, staleStyle.Render(name+" ✕"))
-					}
-				}
-			}
-
-			// Calculate available width for MCPs (width - 4 for panel padding - 9 for "MCPs:    " label)
-			mcpMaxWidth := width - 4 - 9
-			if mcpMaxWidth < 20 {
-				mcpMaxWidth = 20 // Minimum sensible width
-			}
-
-			// Build MCPs progressively to fit within available width
-			var mcpResult strings.Builder
-			mcpCount := 0
-			currentWidth := 0
-
-			for i, part := range mcpParts {
-				// Strip ANSI codes to measure actual display width
-				plainPart := tmux.StripANSI(part)
-				partWidth := runewidth.StringWidth(plainPart)
-
-				// Calculate width including separator if not first
-				addedWidth := partWidth
-				if mcpCount > 0 {
-					addedWidth += 2 // ", " separator
-				}
-
-				remaining := len(mcpParts) - i
-				isLast := remaining == 1
-
-				// For non-last MCPs: reserve space for "+N more" indicator
-				// For last MCP: just check if it fits without indicator
-				var wouldExceed bool
-				if isLast {
-					// Last MCP - just check if it fits
-					wouldExceed = currentWidth+addedWidth > mcpMaxWidth
-				} else {
-					// Not last - check with indicator space reserved
-					moreIndicator := fmt.Sprintf(" (+%d more)", remaining)
-					moreWidth := runewidth.StringWidth(moreIndicator)
-					wouldExceed = currentWidth+addedWidth+moreWidth > mcpMaxWidth
-				}
-
-				if wouldExceed {
-					// Would exceed - show indicator for remaining
-					moreStyle := lipgloss.NewStyle().Foreground(ColorText).Italic(true)
-					if mcpCount > 0 {
-						mcpResult.WriteString(moreStyle.Render(fmt.Sprintf(" (+%d more)", remaining)))
-					} else {
-						// No MCPs fit - just show count
-						mcpResult.WriteString(moreStyle.Render(fmt.Sprintf("(%d MCPs)", len(mcpParts))))
-					}
-					break
-				}
-
-				// Add separator if not first
-				if mcpCount > 0 {
-					mcpResult.WriteString(", ")
-				}
-				mcpResult.WriteString(part)
-				currentWidth += addedWidth
-				mcpCount++
-			}
-
-			b.WriteString(mcpResult.String())
-			b.WriteString("\n")
-		}
-
-		// Fork hint when session can be forked
-		if selected.CanFork() {
-			hintStyle := lipgloss.NewStyle().Foreground(ColorText).Italic(true)
-			keyStyle := lipgloss.NewStyle().Foreground(ColorAccent).Bold(true)
-			b.WriteString(hintStyle.Render("Fork:    "))
-			b.WriteString(keyStyle.Render("f"))
-			b.WriteString(hintStyle.Render(" quick fork, "))
-			b.WriteString(keyStyle.Render("F"))
-			b.WriteString(hintStyle.Render(" fork with options"))
-			b.WriteString("\n")
-		}
-	}
-
-	// Gemini-specific info (session ID)
-	if selected.Tool == "gemini" {
-		geminiHeader := renderSectionDivider("Gemini", width-4)
-		b.WriteString(geminiHeader)
-		b.WriteString("\n")
-
-		labelStyle := lipgloss.NewStyle().Foreground(ColorText)
-		valueStyle := lipgloss.NewStyle().Foreground(ColorText)
-
-		if selected.GeminiSessionID != "" {
-			statusStyle := lipgloss.NewStyle().Foreground(ColorGreen).Bold(true)
-			b.WriteString(labelStyle.Render("Status:  "))
-			b.WriteString(statusStyle.Render("● Connected"))
-			b.WriteString("\n")
-
-			b.WriteString(labelStyle.Render("Session: "))
-			b.WriteString(valueStyle.Render(selected.GeminiSessionID))
-			b.WriteString("\n")
-
-			// Display active model
-			modelDisplay := "auto"
-			if selected.GeminiModel != "" {
-				modelDisplay = selected.GeminiModel
-			}
-			accentStyle := lipgloss.NewStyle().Foreground(ColorAccent)
-			b.WriteString(labelStyle.Render("Model:   "))
-			b.WriteString(accentStyle.Render(modelDisplay))
-			b.WriteString("\n")
-
-			// MCPs for Gemini (global only)
-			mcpInfo := selected.GetMCPInfo()
-			renderSimpleMCPLine(&b, mcpInfo, width)
-		} else {
-			statusStyle := lipgloss.NewStyle().Foreground(ColorText)
-			b.WriteString(labelStyle.Render("Status:  "))
-			b.WriteString(statusStyle.Render("○ Not connected"))
-			b.WriteString("\n")
-		}
-	}
-
-	// OpenCode-specific info (session ID)
-	if selected.Tool == "opencode" {
-		opencodeHeader := renderSectionDivider("OpenCode", width-4)
-		b.WriteString(opencodeHeader)
-		b.WriteString("\n")
-
-		labelStyle := lipgloss.NewStyle().Foreground(ColorText)
-		valueStyle := lipgloss.NewStyle().Foreground(ColorText)
-
-		// Debug: log what value we're seeing
-		uiLog.Debug(
-			"opencode_rendering_preview",
-			slog.String("title", selected.Title),
-			slog.String("session_id", selected.OpenCodeSessionID),
-		)
-
-		if selected.OpenCodeSessionID != "" {
-			statusStyle := lipgloss.NewStyle().Foreground(ColorGreen).Bold(true)
-			b.WriteString(labelStyle.Render("Status:  "))
-			b.WriteString(statusStyle.Render("● Connected"))
-			b.WriteString("\n")
-
-			b.WriteString(labelStyle.Render("Session: "))
-			b.WriteString(valueStyle.Render(selected.OpenCodeSessionID))
-			b.WriteString("\n")
-
-			// Show when session was detected
-			if !selected.OpenCodeDetectedAt.IsZero() {
-				detectedAgo := formatRelativeTime(selected.OpenCodeDetectedAt)
-				dimStyle := lipgloss.NewStyle().Foreground(ColorText).Italic(true)
-				b.WriteString(labelStyle.Render("Detected:"))
-				b.WriteString(dimStyle.Render(" " + detectedAgo))
-				b.WriteString("\n")
-			}
-
-			// Fork hint for OpenCode
-			if selected.CanFork() {
-				renderForkHintLine(&b)
-			}
-		} else {
-			// Check if detection has completed (OpenCodeDetectedAt is set even when no session found)
-			if selected.OpenCodeDetectedAt.IsZero() {
-				// Detection not yet completed - show detecting state
-				statusStyle := lipgloss.NewStyle().Foreground(ColorYellow)
-				b.WriteString(labelStyle.Render("Status:  "))
-				b.WriteString(statusStyle.Render("◐ Detecting session..."))
-				b.WriteString("\n")
-			} else {
-				// Detection completed but no session found
-				statusStyle := lipgloss.NewStyle().Foreground(ColorText)
-				b.WriteString(labelStyle.Render("Status:  "))
-				b.WriteString(statusStyle.Render("○ No session found"))
-				b.WriteString("\n")
-			}
-		}
-	}
-
-	// Codex-specific info (session ID, detection)
-	if selected.Tool == "codex" {
-		codexHeader := renderSectionDivider("Codex", width-4)
-		b.WriteString(codexHeader)
-		b.WriteString("\n")
-
-		renderToolStatusLine(&b, selected.CodexSessionID, selected.CodexDetectedAt, true)
-		if selected.CodexSessionID != "" {
-			renderDetectedAtLine(&b, selected.CodexDetectedAt)
-		}
-	}
-
-	// Custom tool info (tools defined in config.toml that aren't built-in)
-	if selected.Tool != "claude" && selected.Tool != "gemini" && selected.Tool != "opencode" &&
-		selected.Tool != "codex" {
-		if toolDef := session.GetToolDef(selected.Tool); toolDef != nil {
-			toolName := selected.Tool
-			if toolDef.Icon != "" {
-				toolName = toolDef.Icon + " " + toolName
-			}
-			customHeader := renderSectionDivider(toolName, width-4)
-			b.WriteString(customHeader)
-			b.WriteString("\n")
-
-			labelStyle := lipgloss.NewStyle().Foreground(ColorText)
-
-			genericID := selected.GetGenericSessionID()
-			if genericID != "" {
-				statusStyle := lipgloss.NewStyle().Foreground(ColorGreen).Bold(true)
-				valueStyle := lipgloss.NewStyle().Foreground(ColorText)
-				b.WriteString(labelStyle.Render("Status:  "))
-				b.WriteString(statusStyle.Render("● Connected"))
-				b.WriteString("\n")
-
-				b.WriteString(labelStyle.Render("Session: "))
-				b.WriteString(valueStyle.Render(genericID))
-				b.WriteString("\n")
-			} else {
-				statusStyle := lipgloss.NewStyle().Foreground(ColorText)
-				b.WriteString(labelStyle.Render("Status:  "))
-				b.WriteString(statusStyle.Render("○ Not connected"))
-				b.WriteString("\n")
-			}
-
-			// Resume hint when tool supports restart with session resume
-			if selected.CanRestartGeneric() {
-				hintStyle := lipgloss.NewStyle().Foreground(ColorText).Italic(true)
-				keyStyle := lipgloss.NewStyle().Foreground(ColorAccent).Bold(true)
-				b.WriteString(hintStyle.Render("Resume:  "))
-				b.WriteString(keyStyle.Render("r"))
-				b.WriteString(hintStyle.Render(" restart with session resume"))
-				b.WriteString("\n")
-			}
-		}
-	}
-
-	b.WriteString("\n")
-
-	// Special handling for error state - show guidance instead of output
-	if selected.Status == session.StatusError {
-		errorHeader := renderSectionDivider("Session Inactive", width-4)
-		b.WriteString(errorHeader)
-		b.WriteString("\n\n")
-
-		// Warning icon and message
-		warnStyle := lipgloss.NewStyle().Foreground(ColorYellow)
-		dimStyle := lipgloss.NewStyle().Foreground(ColorText)
-		keyStyle := lipgloss.NewStyle().Foreground(ColorAccent).Bold(true)
-
-		b.WriteString(warnStyle.Render("⚠ No tmux session running"))
-		b.WriteString("\n\n")
-		b.WriteString(dimStyle.Render("This can happen if:"))
-		b.WriteString("\n")
-		b.WriteString(dimStyle.Render("  • Session was added but not yet started"))
-		b.WriteString("\n")
-		b.WriteString(dimStyle.Render("  • tmux server was restarted"))
-		b.WriteString("\n")
-		b.WriteString(dimStyle.Render("  • Terminal was closed or system rebooted"))
-		b.WriteString("\n\n")
-		b.WriteString(dimStyle.Render("Actions:"))
-		b.WriteString("\n")
-		b.WriteString("  ")
-		b.WriteString(keyStyle.Render("R"))
-		b.WriteString(dimStyle.Render(" Start   - create and start tmux session"))
-		b.WriteString("\n")
-		b.WriteString("  ")
-		b.WriteString(keyStyle.Render("d"))
-		b.WriteString(dimStyle.Render(" Delete  - remove from list"))
-		b.WriteString("\n")
-		b.WriteString("  ")
-		b.WriteString(keyStyle.Render("Enter"))
-		b.WriteString(dimStyle.Render(" - attach (will auto-start)"))
-		b.WriteString("\n")
-
-		// Pad output to exact height to prevent layout shifts
-		content := b.String()
-		lines := strings.Split(content, "\n")
-		lineCount := len(lines)
-
-		if lineCount < height {
-			for i := lineCount; i < height; i++ {
-				content += "\n"
-			}
-		}
-
-		if len(content) > 0 && content[len(content)-1] == '\n' {
-			content = content[:len(content)-1]
-		}
-
-		return content
-	}
-
-	// Check preview settings for what to show
-	config, _ := session.LoadUserConfig()
-	showAnalytics := config != nil && config.GetShowAnalytics() &&
-		(selected.Tool == "claude" || selected.Tool == "gemini")
-	showOutput := config == nil || config.GetShowOutput() // Default to true if config fails
-
-	// Apply preview mode override (v key cycles through modes)
-	switch h.previewMode {
-	case PreviewModeOutput:
-		showAnalytics = false
-		showOutput = true
-	case PreviewModeAnalytics:
-		// showAnalytics keeps its default value (only available for Claude/Gemini)
-		showOutput = false
-		// PreviewModeBoth: use config settings (default)
-	}
-
-	// Check if session is launching/resuming (for animation priority)
-	_, isSessionLaunching := h.launchingSessions[selected.ID]
-	_, isSessionResuming := h.resumingSessions[selected.ID]
-	_, isSessionForking := h.forkingSessions[selected.ID]
-	isStartingUp := isSessionLaunching || isSessionResuming || isSessionForking
-
-	// Analytics panel (for Claude/Gemini sessions with analytics enabled)
-	// Skip showing "Loading analytics..." during startup - let the launch animation take focus
-	if showAnalytics && !isStartingUp {
-		analyticsHeader := renderSectionDivider("Analytics", width-4)
-		b.WriteString(analyticsHeader)
-		b.WriteString("\n")
-
-		// Check if we have analytics for this session
-		if h.analyticsSessionID == selected.ID && (h.currentAnalytics != nil || h.currentGeminiAnalytics != nil) {
-			// Pass display settings from config
-			if config != nil {
-				h.analyticsPanel.SetDisplaySettings(config.Preview.GetAnalyticsSettings())
-			}
-			h.analyticsPanel.SetSize(width-4, height/2)
-			b.WriteString(h.analyticsPanel.View())
-			b.WriteString("\n")
-		} else {
-			// Analytics not yet loaded
-			loadingStyle := lipgloss.NewStyle().
-				Foreground(ColorText).
-				Italic(true)
-			b.WriteString(loadingStyle.Render("Loading analytics..."))
-			b.WriteString("\n\n")
-		}
-	}
-
-	// If output is disabled AND not starting up, return early
-	// (We want to show the launch animation even if output is normally disabled)
-	if !showOutput && !isStartingUp {
-		// If analytics was also not shown, display session info card as fallback
-		if !showAnalytics {
-			infoCard := h.renderSessionInfoCard(selected, width, height)
-			b.WriteString("\n")
-			b.WriteString(infoCard)
-		}
-
-		// Pad output to exact height to prevent layout shifts
-		content := b.String()
-		lines := strings.Split(content, "\n")
-		lineCount := len(lines)
-		if lineCount < height {
-			for i := lineCount; i < height; i++ {
-				content += "\n"
-			}
-		}
-		if len(content) > 0 && content[len(content)-1] == '\n' {
-			content = content[:len(content)-1]
-		}
-		return content
-	}
-
-	// Terminal output header
-	termHeader := renderSectionDivider("Output", width-4)
-	b.WriteString(termHeader)
-	b.WriteString("\n")
-
-	// Check if this session is launching (newly created), resuming (restarted), or forking
-	launchTime, isLaunching := h.launchingSessions[selected.ID]
-	resumeTime, isResuming := h.resumingSessions[selected.ID]
-	mcpLoadTime, isMcpLoading := h.mcpLoadingSessions[selected.ID]
-	forkTime, isForking := h.forkingSessions[selected.ID]
-
-	// Determine if we should show animation (launch, resume, MCP loading, or forking)
-	// For Claude: show for minimum 6 seconds, then check for ready indicators
-	// For others: show for first 3 seconds after creation
-	showLaunchingAnimation := false
-	showMcpLoadingAnimation := false
-	showForkingAnimation := isForking // Show forking animation immediately
-	var animationStartTime time.Time
-	if isLaunching {
-		animationStartTime = launchTime
-	} else if isResuming {
-		animationStartTime = resumeTime
-	} else if isMcpLoading {
-		animationStartTime = mcpLoadTime
-	}
-
-	// Apply STATUS-BASED animation logic (matches hasActiveAnimation exactly)
-	// Animation shows until session is ready, detected via status or content
-	if isLaunching || isResuming || isMcpLoading {
-		timeSinceStart := time.Since(animationStartTime)
-
-		// Brief minimum to prevent flicker
-		if timeSinceStart < launchAnimationMinDuration(selected.Tool) {
-			if isMcpLoading {
-				showMcpLoadingAnimation = true
-			} else {
-				showLaunchingAnimation = true
-			}
-		} else if timeSinceStart < 15*time.Second {
-			// STATUS-BASED CHECK: Session ready when Running/Waiting/Idle
-			sessionReady := selected.Status == session.StatusRunning ||
-				selected.Status == session.StatusWaiting ||
-				selected.Status == session.StatusIdle
-
-			if !sessionReady {
-				// Also check content for faster detection
-				h.previewCacheMu.RLock()
-				previewContent := h.previewCache[selected.ID]
-				h.previewCacheMu.RUnlock()
-
-				// Strip ANSI for reliable pattern matching
-				plainPreview := ansi.Strip(previewContent)
-
-				if selected.Tool == "claude" || selected.Tool == "gemini" {
-					// Claude/Gemini ready indicators
-					agentReady := strings.Contains(plainPreview, "ctrl+c to interrupt") ||
-						strings.Contains(plainPreview, "No, and tell Claude what to do differently") ||
-						strings.Contains(plainPreview, "\n> ") ||
-						strings.Contains(plainPreview, "> \n") ||
-						strings.Contains(plainPreview, "esc to interrupt") ||
-						strings.Contains(plainPreview, "⠋") || strings.Contains(plainPreview, "⠙") ||
-						strings.Contains(plainPreview, "Thinking") ||
-						strings.Contains(plainPreview, "╭─")
-
-					if selected.Tool == "gemini" {
-						agentReady = agentReady ||
-							strings.Contains(plainPreview, "▸") ||
-							strings.Contains(plainPreview, "gemini>")
-					}
-
-					if !agentReady {
-						if isMcpLoading {
-							showMcpLoadingAnimation = true
-						} else {
-							showLaunchingAnimation = true
-						}
-					}
-				} else {
-					// Non-Claude/Gemini: ready if substantial content
-					if len(strings.TrimSpace(plainPreview)) <= 50 {
-						if isMcpLoading {
-							showMcpLoadingAnimation = true
-						} else {
-							showLaunchingAnimation = true
-						}
-					}
-				}
-			}
-		}
-		// After 15 seconds, animation stops regardless
-	}
-
-	// Terminal preview - use cached content (async fetching keeps View() pure)
-	h.previewCacheMu.RLock()
-	preview, hasCached := h.previewCache[selected.ID]
-	h.previewCacheMu.RUnlock()
-
-	// Show forking animation when fork is in progress (highest priority)
-	if showForkingAnimation {
-		b.WriteString("\n")
-		b.WriteString(h.renderForkingState(selected, width, forkTime))
-	} else if showMcpLoadingAnimation {
-		// Show MCP loading animation when reloading MCPs
-		b.WriteString("\n")
-		b.WriteString(h.renderMcpLoadingState(selected, width, mcpLoadTime))
-	} else if showLaunchingAnimation {
-		// Show launching animation for new sessions
-		b.WriteString("\n")
-		b.WriteString(h.renderLaunchingState(selected, width, animationStartTime))
-	} else if !hasCached {
-		// Show loading indicator while waiting for async fetch
-		loadingStyle := lipgloss.NewStyle().
-			Foreground(ColorText).
-			Italic(true)
-		b.WriteString(loadingStyle.Render("Loading preview..."))
-	} else if preview == "" {
-		emptyTerm := lipgloss.NewStyle().
-			Foreground(ColorText).
-			Italic(true).
-			Render("(terminal is empty)")
-		b.WriteString(emptyTerm)
-	} else {
-		// Calculate maxLines dynamically based on how many header lines we've already written
-		// This accounts for Claude sessions having more header lines than other sessions
-		currentContent := b.String()
-		headerLines := strings.Count(currentContent, "\n") + 1 // +1 for the current line
-		lines := strings.Split(preview, "\n")
-
-		// Strip trailing empty lines BEFORE truncation
-		// This ensures we show actual content, not empty trailing lines when space is limited
-		// (Terminal output often ends with empty lines at cursor position)
-		for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
-			lines = lines[:len(lines)-1]
-		}
-
-		// If all lines were empty, show empty indicator
-		if len(lines) == 0 {
-			emptyTerm := lipgloss.NewStyle().
-				Foreground(ColorText).
-				Italic(true).
-				Render("(terminal is empty)")
-			b.WriteString(emptyTerm)
-			return b.String()
-		}
-
-		maxLines := height - headerLines - 1 // -1 for potential truncation indicator
-		if maxLines < 1 {
-			maxLines = 1
-		}
-
-		// Track if we're truncating from the top (for indicator)
-		truncatedFromTop := len(lines) > maxLines
-		truncatedCount := 0
-		if truncatedFromTop {
-			// Reserve one line for the truncation indicator
-			maxLines--
-			if maxLines < 1 {
-				maxLines = 1
-			}
-			truncatedCount = len(lines) - maxLines
-			lines = lines[len(lines)-maxLines:]
-		}
-
-		maxWidth := width - 4
-		if maxWidth < 10 {
-			maxWidth = 10
-		}
-
-		// Show truncation indicator if content was cut from top
-		if truncatedFromTop {
-			truncIndicator := lipgloss.NewStyle().
-				Foreground(ColorText).
-				Italic(true).
-				Render(fmt.Sprintf("⋮ %d more lines above", truncatedCount))
-			b.WriteString(truncIndicator)
-			b.WriteString("\n")
-		}
-
-		// Track consecutive empty lines to preserve some spacing
-		consecutiveEmpty := 0
-		const maxConsecutiveEmpty = 2 // Allow up to 2 consecutive empty lines
-
-		for _, line := range lines {
-			// Strip dangerous control characters (\r, \b, etc.) but preserve
-			// ANSI escape sequences (ESC = 0x1b) so colors and formatting
-			// from the captured terminal output pass through to display.
-			safeLine := stripControlCharsPreserveANSI(line)
-
-			// Check if visually empty (strip ANSI for this check)
-			stripped := ansi.Strip(safeLine)
-			trimmed := strings.TrimSpace(stripped)
-			if trimmed == "" {
-				consecutiveEmpty++
-				if consecutiveEmpty <= maxConsecutiveEmpty {
-					b.WriteString("\n") // Preserve empty line
-				}
-				continue
-			}
-			consecutiveEmpty = 0 // Reset counter on non-empty line
-
-			// Truncate based on display width using ANSI-aware measurement
-			// ansi.StringWidth ignores escape sequences for accurate width
-			displayWidth := ansi.StringWidth(safeLine)
-			if displayWidth > maxWidth {
-				// ansi.Truncate preserves ANSI codes while truncating visible content
-				safeLine = ansi.Truncate(safeLine, maxWidth-3, "...")
-			}
-
-			b.WriteString(safeLine)
-			b.WriteString("\n")
-		}
-	}
-
-	// CRITICAL: Enforce width constraint on ALL lines to prevent overflow into left panel
-	// When lipgloss.JoinHorizontal combines panels, any line exceeding rightWidth
-	// will wrap and corrupt the layout
-	maxWidth := width - 2 // Small margin for safety
-	if maxWidth < 20 {
-		maxWidth = 20
-	}
-
-	result := b.String()
-	lines := strings.Split(result, "\n")
-	var truncatedLines []string
-	for _, line := range lines {
-		// Use ANSI-aware width measurement to handle lines with escape codes
-		displayWidth := ansi.StringWidth(line)
-		if displayWidth > maxWidth {
-			// ANSI-aware truncation preserves escape codes while trimming visible content
-			truncated := ansi.Truncate(line, maxWidth-3, "...")
-			truncatedLines = append(truncatedLines, truncated)
-		} else {
-			truncatedLines = append(truncatedLines, line)
-		}
-	}
-
-	return strings.Join(truncatedLines, "\n")
-}
-
-// stripControlCharsPreserveANSI removes dangerous C0 control characters while
-// preserving ANSI escape sequences (ESC = 0x1b). This allows terminal colors
-// and formatting from capture-pane -e output to pass through to display, while
-// still stripping \r, \b, and other control chars that corrupt TUI layout.
-func stripControlCharsPreserveANSI(s string) string {
-	return strings.Map(func(r rune) rune {
-		if r < 0x20 && r != '\n' && r != '\t' && r != '\x1b' {
-			return -1 // Drop the character
-		}
-		return r
-	}, s)
-}
-
-// truncatePath shortens a path to fit within maxLen display width
-func truncatePath(path string, maxLen int) string {
-	pathWidth := runewidth.StringWidth(path)
-	if pathWidth <= maxLen {
-		return path
-	}
-	if maxLen < 10 {
-		maxLen = 10
-	}
-	// Show beginning and end: /Users/.../project
-	// Use rune-based slicing for proper Unicode handling
-	runes := []rune(path)
-	startLen := maxLen / 3
-	endLen := maxLen*2/3 - 3
-	if startLen+endLen+3 > len(runes) {
-		// Path is short in runes but wide in display - use simple truncation
-		return runewidth.Truncate(path, maxLen-3, "...")
-	}
-	return string(runes[:startLen]) + "..." + string(runes[len(runes)-endLen:])
-}
-
-// formatRelativeTime formats a time as a human-readable relative string
-// Examples: "just now", "2m ago", "1h ago", "3h ago", "1d ago"
-func formatRelativeTime(t time.Time) string {
-	if t.IsZero() {
-		return "unknown"
-	}
-
-	d := time.Since(t)
-
-	switch {
-	case d < time.Minute:
-		return "just now"
-	case d < time.Hour:
-		mins := int(d.Minutes())
-		if mins == 1 {
-			return "1m ago"
-		}
-		return fmt.Sprintf("%dm ago", mins)
-	case d < 24*time.Hour:
-		hours := int(d.Hours())
-		if hours == 1 {
-			return "1h ago"
-		}
-		return fmt.Sprintf("%dh ago", hours)
-	default:
-		days := int(d.Hours() / 24)
-		if days == 1 {
-			return "1d ago"
-		}
-		return fmt.Sprintf("%dd ago", days)
-	}
-}
-
-// renderGroupPreview renders the preview pane for a group
-func (h *Home) renderGroupPreview(group *session.Group, width, height int) string {
-	var b strings.Builder
-
-	// Group header with folder icon
-	headerStyle := lipgloss.NewStyle().
-		Foreground(ColorCyan).
-		Bold(true)
-	b.WriteString(headerStyle.Render("📁 " + group.Name))
-	b.WriteString("\n\n")
-
-	// Session count
-	countStyle := lipgloss.NewStyle().
-		Foreground(ColorText).
-		Bold(true)
-	b.WriteString(countStyle.Render(fmt.Sprintf("%d sessions", len(group.Sessions))))
-	b.WriteString("\n\n")
-
-	// Status breakdown with inline badges
-	running, waiting, idle, errored := 0, 0, 0, 0
-	for _, sess := range group.Sessions {
-		switch sess.Status {
-		case session.StatusRunning:
-			running++
-		case session.StatusWaiting:
-			waiting++
-		case session.StatusIdle:
-			idle++
-		case session.StatusError:
-			errored++
-		}
-	}
-
-	// Compact status line (inline, not badges)
-	var statuses []string
-	if running > 0 {
-		statuses = append(
-			statuses,
-			lipgloss.NewStyle().Foreground(ColorGreen).Render(fmt.Sprintf("● %d running", running)),
-		)
-	}
-	if waiting > 0 {
-		statuses = append(
-			statuses,
-			lipgloss.NewStyle().Foreground(ColorYellow).Render(fmt.Sprintf("◐ %d waiting", waiting)),
-		)
-	}
-	if idle > 0 {
-		statuses = append(statuses, lipgloss.NewStyle().Foreground(ColorText).Render(fmt.Sprintf("○ %d idle", idle)))
-	}
-	if errored > 0 {
-		statuses = append(statuses, lipgloss.NewStyle().Foreground(ColorRed).Render(fmt.Sprintf("✕ %d error", errored)))
-	}
-
-	if len(statuses) > 0 {
-		b.WriteString(strings.Join(statuses, "  "))
-		b.WriteString("\n\n")
-	}
-
-	// Repository worktree summary (when all sessions share the same repo root)
-	if repoInfo := h.getGroupWorktreeInfo(group); repoInfo != nil {
-		b.WriteString(renderSectionDivider("Repository", width-4))
-		b.WriteString("\n")
-
-		repoLabelStyle := lipgloss.NewStyle().Foreground(ColorText)
-		repoValueStyle := lipgloss.NewStyle().Foreground(ColorText)
-		repoBranchStyle := lipgloss.NewStyle().Foreground(ColorCyan).Bold(true)
-
-		b.WriteString(repoLabelStyle.Render("Repo:       "))
-		b.WriteString(repoValueStyle.Render(truncatePath(repoInfo.repoRoot, width-4-12)))
-		b.WriteString("\n")
-
-		b.WriteString(repoLabelStyle.Render("Worktrees:  "))
-		b.WriteString(repoValueStyle.Render(fmt.Sprintf("%d active", len(repoInfo.branches))))
-		b.WriteString("\n")
-
-		for _, br := range repoInfo.branches {
-			dirtyMark := ""
-			if br.dirtyChecked {
-				if br.isDirty {
-					dirtyMark = lipgloss.NewStyle().Foreground(ColorYellow).Render(" (dirty)")
-				} else {
-					dirtyMark = lipgloss.NewStyle().Foreground(ColorGreen).Render(" (clean)")
-				}
-			}
-			b.WriteString("  ")
-			b.WriteString(repoBranchStyle.Render("• " + br.branch))
-			b.WriteString(dirtyMark)
-			b.WriteString("\n")
-		}
-		b.WriteString("\n")
-	}
-
-	// Sessions divider
-	b.WriteString(renderSectionDivider("Sessions", width-4))
-	b.WriteString("\n")
-
-	// Session list (compact)
-	if len(group.Sessions) == 0 {
-		emptyStyle := lipgloss.NewStyle().Foreground(ColorText).Italic(true)
-		b.WriteString(emptyStyle.Render("  No sessions in this group"))
-		b.WriteString("\n")
-	} else {
-		maxShow := height - 12
-		if maxShow < 3 {
-			maxShow = 3
-		}
-		for i, sess := range group.Sessions {
-			if i >= maxShow {
-				remaining := len(group.Sessions) - i
-				b.WriteString(DimStyle.Render(fmt.Sprintf("  ... +%d more", remaining)))
-				break
-			}
-
-			// Status icon
-			statusIcon := "○"
-			statusColor := ColorTextDim
-			switch sess.Status {
-			case session.StatusRunning:
-				statusIcon, statusColor = "●", ColorGreen
-			case session.StatusWaiting:
-				statusIcon, statusColor = "◐", ColorYellow
-			case session.StatusError:
-				statusIcon, statusColor = "✕", ColorRed
-			}
-			status := lipgloss.NewStyle().Foreground(statusColor).Render(statusIcon)
-			name := lipgloss.NewStyle().Foreground(ColorText).Render(sess.Title)
-			tool := lipgloss.NewStyle().Foreground(ColorPurple).Faint(true).Render(sess.Tool)
-
-			b.WriteString(fmt.Sprintf("  %s %s %s\n", status, name, tool))
-		}
-	}
-
-	// Keyboard hints at bottom
-	b.WriteString("\n")
-	hintStyle := lipgloss.NewStyle().Foreground(ColorComment).Italic(true)
-	b.WriteString(hintStyle.Render("Tab toggle • R rename • d delete • g subgroup"))
-
-	// CRITICAL: Enforce width constraint on ALL lines to prevent overflow into left panel
-	maxWidth := max(width-2, 20)
-
-	result := b.String()
-	lines := strings.Split(result, "\n")
-	var truncatedLines []string
-	for _, line := range lines {
-		cleanLine := tmux.StripANSI(line)
-		displayWidth := runewidth.StringWidth(cleanLine)
-		if displayWidth > maxWidth {
-			truncated := runewidth.Truncate(cleanLine, maxWidth-3, "...")
-			truncatedLines = append(truncatedLines, truncated)
-		} else {
-			truncatedLines = append(truncatedLines, line)
-		}
-	}
-
-	return strings.Join(truncatedLines, "\n")
-}
-
-// groupWorktreeBranch holds info about a single worktree branch in a group
-type groupWorktreeBranch struct {
-	branch       string
-	isDirty      bool
-	dirtyChecked bool
-}
-
-// groupWorktreeInfo holds aggregated worktree info for a group sharing a common repo
-type groupWorktreeInfo struct {
-	repoRoot string
-	branches []groupWorktreeBranch
-}
-
-// getGroupWorktreeInfo returns worktree summary if all sessions in the group
-// share the same repo root and at least one is a worktree. Returns nil otherwise.
-func (h *Home) getGroupWorktreeInfo(group *session.Group) *groupWorktreeInfo {
-	if len(group.Sessions) < 2 {
-		return nil
-	}
-
-	// Check if all sessions share a common repo root and count worktrees
-	var commonRepo string
-	var branches []groupWorktreeBranch
-	for _, sess := range group.Sessions {
-		if !sess.IsWorktree() {
-			continue
-		}
-		if commonRepo == "" {
-			commonRepo = sess.WorktreeRepoRoot
-		} else if sess.WorktreeRepoRoot != commonRepo {
-			return nil // Different repos, skip
-		}
-
-		// Get dirty status from cache
-		h.worktreeDirtyMu.Lock()
-		isDirty, hasCached := h.worktreeDirtyCache[sess.ID]
-		h.worktreeDirtyMu.Unlock()
-
-		branches = append(branches, groupWorktreeBranch{
-			branch:       sess.WorktreeBranch,
-			isDirty:      isDirty,
-			dirtyChecked: hasCached,
-		})
-	}
-
-	if len(branches) == 0 {
-		return nil
-	}
-
-	return &groupWorktreeInfo{
-		repoRoot: commonRepo,
-		branches: branches,
-	}
-}
-
-// --- Copy & Send Output helpers ---
-
-const maxTransferSize = 500 * 1024 // 500KB max for inter-session transfer
-
-// copySessionOutput returns a tea.Cmd that copies the session's last response to clipboard.
-func (h *Home) copySessionOutput(inst *session.Instance) tea.Cmd {
-	return func() tea.Msg {
-		content, err := getSessionContent(inst)
-		if err != nil {
-			return copyResultMsg{err: err}
-		}
-
-		termInfo := tmux.GetTerminalInfo()
-		result, err := clipboard.Copy(content, termInfo.SupportsOSC52)
-		if err != nil {
-			return copyResultMsg{err: fmt.Errorf("clipboard: %w", err)}
-		}
-		return copyResultMsg{
-			sessionTitle: inst.Title,
-			lineCount:    result.LineCount,
-		}
-	}
-}
-
-// sendOutputToSession returns a tea.Cmd that sends the source session's output to the target.
-func (h *Home) sendOutputToSession(source, target *session.Instance) tea.Cmd {
-	return func() tea.Msg {
-		content, err := getSessionContent(source)
-		if err != nil {
-			return sendOutputResultMsg{
-				targetTitle: target.Title,
-				err:         err,
-			}
-		}
-
-		// Truncate if too large
-		if len(content) > maxTransferSize {
-			content = content[:maxTransferSize] + "\n[Truncated at 500KB]"
-		}
-
-		// Wrap with header/footer
-		wrapped := fmt.Sprintf("--- Output from [%s] ---\n%s\n--- End output from [%s] ---\n",
-			source.Title, content, source.Title)
-
-		tmuxSession := target.GetTmuxSession()
-		if tmuxSession == nil {
-			return sendOutputResultMsg{
-				targetTitle: target.Title,
-				err:         fmt.Errorf("target session has no tmux pane"),
-			}
-		}
-
-		if err := tmuxSession.SendKeysChunked(wrapped); err != nil {
-			return sendOutputResultMsg{
-				targetTitle: target.Title,
-				err:         fmt.Errorf("send failed: %w", err),
-			}
-		}
-
-		lineCount := strings.Count(content, "\n")
-		return sendOutputResultMsg{
-			sourceTitle: source.Title,
-			targetTitle: target.Title,
-			lineCount:   lineCount,
-		}
-	}
-}
 
 // handleSessionPickerDialogKey handles key events when the session picker is visible.
 func (h *Home) handleSessionPickerDialogKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -9082,6 +6154,541 @@ func (h *Home) finishWorktree(inst *session.Instance, sessionID, sessionTitle, b
 	}
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// Kanban Board Integration
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// rebuildKanbanSidebar builds the sidebar state from the current groupTree
+func (h *Home) rebuildKanbanSidebar() {
+	var groups []KanbanSidebarGroup
+
+	// "All Sessions" always first
+	groups = append(groups, KanbanSidebarGroup{
+		Name:          "All Sessions",
+		Path:          "",
+		KanbanEnabled: false,
+		SessionCount:  len(h.instances),
+		IsAllSessions: true,
+	})
+
+	// Add root groups
+	if h.groupTree != nil {
+		for _, g := range h.groupTree.GroupList {
+			kanbanEnabled := false
+			if cfg, err := h.storage.GetGroupKanbanConfig(g.Path); err == nil && cfg != nil {
+				kanbanEnabled = cfg.KanbanEnabled
+			}
+			groups = append(groups, KanbanSidebarGroup{
+				Name:          g.Name,
+				Path:          g.Path,
+				KanbanEnabled: kanbanEnabled,
+				SessionCount:  len(g.Sessions),
+			})
+		}
+	}
+
+	h.kanbanSidebarState = KanbanSidebarState{
+		Groups:      groups,
+		SelectedIdx: h.kanbanSidebarState.SelectedIdx,
+		Focused:     h.kanbanFocus == PanelSidebar,
+		Height:      h.height - 5, // account for header, filter, help
+	}
+}
+
+// getKanbanInstances returns instances for the currently selected kanban group
+func (h *Home) getKanbanInstances() []*session.Instance {
+	if len(h.kanbanSidebarState.Groups) == 0 {
+		return nil
+	}
+
+	selected := h.kanbanSidebarState.Groups[h.kanbanSidebarState.SelectedIdx]
+
+	// "All Sessions" shows everything
+	if selected.IsAllSessions {
+		h.instancesMu.RLock()
+		defer h.instancesMu.RUnlock()
+		result := make([]*session.Instance, len(h.instances))
+		copy(result, h.instances)
+		return result
+	}
+
+	// Filter to group
+	h.instancesMu.RLock()
+	defer h.instancesMu.RUnlock()
+	var result []*session.Instance
+	for _, inst := range h.instances {
+		if inst.GroupPath == selected.Path {
+			result = append(result, inst)
+		}
+	}
+	return result
+}
+
+// getKanbanInstancesLocked returns instances for the currently selected kanban group.
+// Assumes caller already holds h.instancesMu.RLock.
+func (h *Home) getKanbanInstancesLocked() []*session.Instance {
+	if len(h.kanbanSidebarState.Groups) == 0 {
+		return nil
+	}
+
+	selected := h.kanbanSidebarState.Groups[h.kanbanSidebarState.SelectedIdx]
+
+	// "All Sessions" shows everything
+	if selected.IsAllSessions {
+		result := make([]*session.Instance, len(h.instances))
+		copy(result, h.instances)
+		return result
+	}
+
+	// Filter to group
+	var result []*session.Instance
+	for _, inst := range h.instances {
+		if inst.GroupPath == selected.Path {
+			result = append(result, inst)
+		}
+	}
+	return result
+}
+
+// renderKanbanLayout renders the full kanban layout: sidebar | board
+func (h *Home) renderKanbanLayout(contentHeight int) string {
+	// Update sidebar height
+	h.kanbanSidebarState.Height = contentHeight
+	h.kanbanSidebarState.Focused = (h.kanbanFocus == PanelSidebar)
+
+	// Render sidebar
+	sidebar := renderKanbanSidebar(h.kanbanSidebarState)
+
+	// Separator
+	separatorStyle := lipgloss.NewStyle().Foreground(ColorBorder)
+	separatorLines := make([]string, contentHeight)
+	for i := range separatorLines {
+		separatorLines[i] = separatorStyle.Render("│")
+	}
+	separator := strings.Join(separatorLines, "\n")
+
+	// Render board
+	instances := h.getKanbanInstances()
+	boardWidth := h.width - kanbanSidebarWidth - 1 // -1 for separator
+	board := renderKanbanBoard(instances, boardWidth, contentHeight, h.kanbanSelectedCol, h.kanbanSelectedRow, 0, h.kanbanMoveMode, h.kanbanMoveTarget, h.kanbanScrollOffsets)
+
+	// Join horizontally
+	result := lipgloss.JoinHorizontal(lipgloss.Top, sidebar, separator, board)
+	result = lipgloss.NewStyle().MaxWidth(h.width).Render(result)
+
+	return result
+}
+
+// handleKanbanKey handles keyboard input when in kanban mode
+func (h *Home) handleKanbanKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+
+	// Handle move mode keys
+	if h.kanbanMoveMode && h.kanbanFocus == PanelBoard {
+		switch key {
+		case "h", "left":
+			if h.kanbanMoveTarget > 0 {
+				h.kanbanMoveTarget--
+			}
+			return h, nil
+		case "l", "right":
+			if h.kanbanMoveTarget < 5 {
+				h.kanbanMoveTarget++
+			}
+			return h, nil
+		case "enter":
+			// Confirm move
+			sourceCol := h.kanbanMoveSource
+			targetCol := h.kanbanMoveTarget
+
+			// Exit move mode
+			h.kanbanMoveMode = false
+			h.kanbanMoveTarget = 0
+			h.kanbanMoveSource = 0
+
+			// If same column, no-op
+			if sourceCol == targetCol {
+				return h, nil
+			}
+
+			// Get the card being moved
+			instances := h.getKanbanInstances()
+			card := h.findKanbanCard(instances)
+			if card == nil {
+				return h, nil
+			}
+
+			fromCol := kanbanColumnsOrdered[sourceCol]
+			toCol := kanbanColumnsOrdered[targetCol]
+
+			// If moving backward, show confirmation using ShowConfirmDialogMsg
+			if targetCol < sourceCol {
+				return h, func() tea.Msg {
+					return ShowConfirmDialogMsg{
+						Title: "Confirm Move Backward",
+						Body:  "Move " + card.Title + " from " + fromCol.String() + " to " + toCol.String() + "?",
+						OnConfirm: MoveConfirmedMsg{
+							SessionID:  card.ID,
+							FromColumn: fromCol,
+							ToColumn:   toCol,
+						},
+					}
+				}
+			}
+
+			// Move forward: send message directly
+			return h, func() tea.Msg {
+				return MoveConfirmedMsg{
+					SessionID:  card.ID,
+					FromColumn: fromCol,
+					ToColumn:   toCol,
+				}
+			}
+		case "esc":
+			// Cancel move mode
+			h.kanbanMoveMode = false
+			h.kanbanMoveTarget = 0
+			h.kanbanMoveSource = 0
+			return h, nil
+		default:
+			// Ignore other keys in move mode
+			return h, nil
+		}
+	}
+
+	switch key {
+	case "q", "ctrl+c":
+		return h.tryQuit()
+
+	case "esc", "ctrl+k":
+		// Exit kanban mode, return to normal list view
+		h.kanbanMode = false
+		return h, nil
+
+	case "tab":
+		// Toggle focus between sidebar and board
+		if h.kanbanFocus == PanelSidebar {
+			h.kanbanFocus = PanelBoard
+		} else {
+			h.kanbanFocus = PanelSidebar
+		}
+		h.kanbanSidebarState.Focused = (h.kanbanFocus == PanelSidebar)
+		return h, nil
+
+	case "1", "2", "3", "4", "5", "6":
+		// Jump to column (board only)
+		if h.kanbanFocus == PanelBoard {
+			h.kanbanSelectedCol = int(key[0]-'0') - 1
+			h.kanbanSelectedRow = 0
+		}
+		return h, nil
+
+	case "enter":
+		// Attach to selected session (board only)
+		if h.kanbanFocus == PanelBoard {
+			instances := h.getKanbanInstances()
+			card := h.findKanbanCard(instances)
+			if card != nil {
+				return h, h.attachSession(card)
+			}
+		}
+		return h, nil
+
+	case "?":
+		// Show help overlay
+		h.helpOverlay.Show()
+		h.helpOverlay.SetSize(h.width, h.height)
+		return h, nil
+
+	case "m":
+		// Enter move mode (board only, not already in move mode)
+		if h.kanbanFocus == PanelBoard && !h.kanbanMoveMode {
+			instances := h.getKanbanInstances()
+			card := h.findKanbanCard(instances)
+			if card != nil {
+				h.kanbanMoveMode = true
+				h.kanbanMoveTarget = h.kanbanSelectedCol
+				h.kanbanMoveSource = h.kanbanSelectedCol
+			}
+		}
+		return h, nil
+
+	case "n":
+		// Create new session in current column (board only)
+		if h.kanbanFocus == PanelBoard {
+			if h.kanbanSelectedCol < 0 || h.kanbanSelectedCol >= len(kanbanColumnsOrdered) {
+				return h, nil
+			}
+			col := kanbanColumnsOrdered[h.kanbanSelectedCol]
+			return h, h.createKanbanSession(col)
+		}
+		return h, nil
+
+	case "d":
+		// Delete selected session (board only)
+		if h.kanbanFocus == PanelBoard {
+			instances := h.getKanbanInstances()
+			card := h.findKanbanCard(instances)
+			if card != nil {
+				h.confirmDialog.ShowDeleteSession(card.ID, card.Title, card.IsSandboxed(), card.IsVagrantMode())
+			}
+		}
+		return h, nil
+
+	case "e":
+		// Enter edit mode when detail panel has focus and is visible
+		// TODO: Wire this up when KanbanDetailState is integrated into Home
+		// For now, this is a placeholder for Task 4.2 completion
+		if h.kanbanFocus == PanelDetail {
+			// h.kanbanDetailState = EnterEditMode(h.kanbanDetailState)
+			return h, nil
+		}
+		return h, nil
+	}
+
+	// TODO (Task 4.2): Edit mode key handling when kanbanDetailState.Editing == true
+	// When in edit mode:
+	//   - Tab: h.kanbanDetailState = NextEditField(h.kanbanDetailState)
+	//   - Shift+Tab: h.kanbanDetailState = PrevEditField(h.kanbanDetailState)
+	//   - Esc: h.kanbanDetailState = ExitEditMode(h.kanbanDetailState)
+	//   - Enter: Save the focused field and stay in edit mode
+	//   - All other keys: no-op (prevent board navigation)
+
+	// Route navigation keys based on focus
+	if h.kanbanFocus == PanelSidebar {
+		h.kanbanSidebarState = updateKanbanSidebarNav(h.kanbanSidebarState, key)
+		return h, nil
+	}
+
+	// Board navigation
+	switch key {
+	case "h", "left":
+		if h.kanbanSelectedCol > 0 {
+			h.kanbanSelectedCol--
+			h.kanbanSelectedRow = 0
+		}
+	case "l", "right":
+		if h.kanbanSelectedCol < 5 {
+			h.kanbanSelectedCol++
+			h.kanbanSelectedRow = 0
+		}
+	case "j", "down":
+		h.kanbanSelectedRow++
+	case "k", "up":
+		if h.kanbanSelectedRow > 0 {
+			h.kanbanSelectedRow--
+		}
+	}
+
+	// TODO: Auto-scroll to keep selection visible after navigation
+	// h.autoScrollKanbanSelection()
+
+	return h, nil
+}
+
+// findKanbanCard finds the card at the current kanban cursor position
+func (h *Home) findKanbanCard(instances []*session.Instance) *session.Instance {
+	// Group by column
+	columnCards := make(map[session.KanbanColumn][]*session.Instance)
+	for _, inst := range instances {
+		if inst.KanbanColumn != nil {
+			col := *inst.KanbanColumn
+			columnCards[col] = append(columnCards[col], inst)
+		}
+	}
+
+	// Get the target column
+	if h.kanbanSelectedCol < 0 || h.kanbanSelectedCol >= len(kanbanColumnsOrdered) {
+		return nil
+	}
+	col := kanbanColumnsOrdered[h.kanbanSelectedCol]
+	cards := columnCards[col]
+
+	if h.kanbanSelectedRow >= 0 && h.kanbanSelectedRow < len(cards) {
+		return cards[h.kanbanSelectedRow]
+	}
+	return nil
+}
+
+// autoScrollKanbanSelection updates scroll offsets to keep the selected card visible
+func (h *Home) autoScrollKanbanSelection() {
+	// Get column card counts
+	var columnCardCounts [6]int
+	instances := h.getKanbanInstances()
+	for _, inst := range instances {
+		if inst.KanbanColumn != nil {
+			colIdx := inst.KanbanColumn.Index()
+			if colIdx >= 0 && colIdx < 6 {
+				columnCardCounts[colIdx]++
+			}
+		}
+	}
+
+	// Create nav struct
+	nav := KanbanNav{
+		Col:              h.kanbanSelectedCol,
+		Row:              h.kanbanSelectedRow,
+		Focus:            h.kanbanFocus,
+		DetailOpen:       false, // Not used for scroll calculation
+		ColumnCardCounts: columnCardCounts,
+		ScrollOffsets:    h.kanbanScrollOffsets,
+	}
+
+	// Calculate available height for cards
+	// Total content height minus header line (1)
+	contentHeight := h.height - 3 // -3 for title bar, help bar, and column header
+	if contentHeight < 1 {
+		contentHeight = 1
+	}
+	availableHeight := contentHeight - 1 // -1 for column header
+	cardHeight := 1                      // Compact cards are 1 line each
+
+	// Auto-scroll
+	nav = AutoScrollToSelection(nav, availableHeight, cardHeight)
+
+	// Update scroll offsets
+	h.kanbanScrollOffsets = nav.ScrollOffsets
+}
+
+// --- Kanban Transition Message Handlers ---
+
+// handleExecuteTransition processes an ExecuteTransitionMsg by calling the
+// transition engine and returning appropriate follow-up commands.
+// When the result needs confirmation, it returns a ShowConfirmDialogMsg via
+// a tea.Cmd so the existing dialog infrastructure handles it.
+func (h *Home) handleExecuteTransition(msg ExecuteTransitionMsg) (tea.Model, tea.Cmd) {
+	if h.transitionEngine == nil {
+		uiLog.Warn("transition_engine_nil", slog.String("session", msg.Request.SessionID))
+		return h, nil
+	}
+
+	result := h.transitionEngine.RequestMove(msg.Request)
+
+	// Backward move needs confirmation: emit ShowConfirmDialogMsg
+	if result.NeedsConfirm {
+		dialog := BuildBackwardConfirmDialog(msg.Request)
+		return h, func() tea.Msg { return dialog }
+	}
+
+	// Move failed: display error
+	if result.Error != nil {
+		h.setError(result.Error)
+		return h, nil
+	}
+
+	// Move succeeded: trigger skill if auto-trigger resolved
+	var skillCmd tea.Cmd
+	if result.SkillName != "" {
+		skillCmd = h.triggerSkillCmd(msg.Request.SessionID, result.SkillName, result.ToColumn)
+	}
+
+	return h, tea.Batch(skillCmd, func() tea.Msg { return BoardRefreshMsg{} })
+}
+
+// handleSkillCompleted processes a SkillCompletedMsg. On success it refreshes
+// the board; on failure it shows an error with actions.
+func (h *Home) handleSkillCompleted(msg SkillCompletedMsg) (tea.Model, tea.Cmd) {
+	if msg.Success {
+		uiLog.Info("skill_completed",
+			slog.String("session", msg.SessionID),
+			slog.String("skill", msg.SkillName),
+		)
+		return h, func() tea.Msg { return BoardRefreshMsg{} }
+	}
+
+	// Skill failed: log and show error actions
+	errStr := "unknown error"
+	if msg.Error != nil {
+		errStr = msg.Error.Error()
+	}
+	uiLog.Warn("skill_failed",
+		slog.String("session", msg.SessionID),
+		slog.String("skill", msg.SkillName),
+		slog.String("error", errStr),
+	)
+
+	errDisplay := BuildSkillErrorActions(msg.SessionID, msg.SkillName, msg.Error)
+	h.kanbanErrorDisplay = &errDisplay
+	return h, func() tea.Msg { return BoardRefreshMsg{} }
+}
+
+// handleRollback processes a RollbackMsg by displaying a rollback notification
+// and refreshing the board.
+func (h *Home) handleRollback(msg RollbackMsg) (tea.Model, tea.Cmd) {
+	uiLog.Info("transition_rollback",
+		slog.String("session", msg.SessionID),
+		slog.String("from", msg.FromColumn.String()),
+		slog.String("to", msg.ToColumn.String()),
+	)
+
+	if msg.Error != nil {
+		h.setError(fmt.Errorf("rollback %s -> %s: %w", msg.FromColumn, msg.ToColumn, msg.Error))
+	} else {
+		h.setError(fmt.Errorf("Moved %s back to %s (skill failed)", msg.SessionID, msg.ToColumn))
+	}
+
+	return h, func() tea.Msg { return BoardRefreshMsg{} }
+}
+
+// handleErrorDisplay processes an ErrorDisplayMsg by storing it for rendering
+// in the detail panel.
+func (h *Home) handleErrorDisplay(msg ErrorDisplayMsg) (tea.Model, tea.Cmd) {
+	h.kanbanErrorDisplay = &msg
+	return h, nil
+}
+
+// triggerSkillCmd creates a tea.Cmd that sends a skill command to the session's
+// tmux pane. The skill is sent as a slash command (e.g., "/agentic-ai-review").
+// Returns SkillTriggeredMsg immediately; completion detection is handled by
+// the conductor in Wave 6.
+func (h *Home) triggerSkillCmd(sessionID, skillName string, column session.KanbanColumn) tea.Cmd {
+	// Defense-in-depth: validate skill name to prevent tmux command injection
+	if !ValidateSkillName(skillName) {
+		uiLog.Error("skill_trigger_name_invalid",
+			slog.String("session", sessionID),
+			slog.String("skill", skillName),
+		)
+		return nil
+	}
+
+	return func() tea.Msg {
+		inst := h.getInstanceByID(sessionID)
+		if inst == nil {
+			uiLog.Warn("skill_trigger_session_not_found",
+				slog.String("session", sessionID),
+				slog.String("skill", skillName),
+			)
+			return SkillTriggeredMsg{SessionID: sessionID, SkillName: skillName, Column: column}
+		}
+
+		tmuxSess := inst.GetTmuxSession()
+		if tmuxSess == nil {
+			uiLog.Warn("skill_trigger_no_tmux",
+				slog.String("session", sessionID),
+				slog.String("skill", skillName),
+			)
+			return SkillTriggeredMsg{SessionID: sessionID, SkillName: skillName, Column: column}
+		}
+
+		cmd := "/" + skillName
+		if err := tmuxSess.SendKeysAndEnter(cmd); err != nil {
+			uiLog.Error("skill_trigger_send_failed",
+				slog.String("session", sessionID),
+				slog.String("skill", skillName),
+				slog.String("error", err.Error()),
+			)
+		} else {
+			uiLog.Info("skill_triggered",
+				slog.String("session", sessionID),
+				slog.String("skill", skillName),
+				slog.String("column", column.String()),
+			)
+		}
+
+		return SkillTriggeredMsg{SessionID: sessionID, SkillName: skillName, Column: column}
+	}
+}
+
 // getOtherActiveSessions returns sessions excluding the given ID and error-status sessions.
 func (h *Home) getOtherActiveSessions(excludeID string) []*session.Instance {
 	var result []*session.Instance
@@ -9095,32 +6702,4 @@ func (h *Home) getOtherActiveSessions(excludeID string) []*session.Instance {
 		result = append(result, inst)
 	}
 	return result
-}
-
-// getSessionContent retrieves displayable content from a session.
-// Tries GetLastResponse first, falls back to CaptureFullHistory.
-func getSessionContent(inst *session.Instance) (string, error) {
-	// Try AI response first
-	resp, err := inst.GetLastResponse()
-	if err == nil && resp.Content != "" {
-		return resp.Content, nil
-	}
-
-	// Fall back to tmux pane capture
-	tmuxSession := inst.GetTmuxSession()
-	if tmuxSession == nil {
-		return "", fmt.Errorf("no output available for this session")
-	}
-
-	content, err := tmuxSession.CaptureFullHistory()
-	if err != nil {
-		return "", fmt.Errorf("failed to capture output: %w", err)
-	}
-
-	content = strings.TrimSpace(content)
-	if content == "" {
-		return "", fmt.Errorf("no output available for this session")
-	}
-
-	return content, nil
 }

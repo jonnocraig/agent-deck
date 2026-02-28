@@ -1,5 +1,67 @@
 # Architecture Decisions
 
+## 2026-02-27 - Wave 1 Decomposition: 7-File Split Strategy
+
+**Context**: home.go at 9031 lines needed decomposition into kanban component files. Architect agent analyzed all functions, types, and methods to determine optimal file boundaries. Key question: what stays in home.go vs what gets extracted.
+**Decision**: Extract rendering/display logic into 5 files (kanban_board.go, kanban_card.go, kanban_sidebar.go, kanban_detail.go, kanban_nav.go). Create 2 stubs (kanban_transition.go, kanban_conductor.go). Keep in home.go: Home struct, Init/Update/View lifecycle, all message types (xxxMsg), background workers, dialog handlers, session CRUD, persistence. All extracted methods remain `*Home` receivers — they just live in different files.
+**Consequences**: home.go reduced to 6038 lines (~33% reduction). No circular dependencies (all same `package ui`). Stub files use `string` as placeholder for column types until Phase 1 defines `session.KanbanColumn`. Build, test, and vet all pass. Total lines across 8 files: 9185 (~154 lines overhead from file headers/imports).
+
+## 2026-02-27 - Plan Review: 24 → 28 Tasks with Specific TDD
+
+**Context**: Cross-model review (Gemini 2.5 Pro + Claude Opus 4.6) found 11 gaps in the agent plan vs design doc. Critical: no Bubble Tea message type definitions. High: missing keyboard shortcuts (n/d/K/m), no sort order logic, TDD steps too vague for LLM implementation.
+**Decision**: Added 4 new tasks (1.4 message types, 1.5 sort order, 3.3 create/delete, 3.4 move flow). Enhanced all 28 TDD RED steps with 5-8 named test cases including inputs, expected outputs, and edge cases. Embedded error handling scenarios from design doc directly into task steps. Added batch sort order update to prevent N individual DB writes.
+**Consequences**: Plan is now specific enough for an LLM to implement each task without ambiguity. TDD test cases serve as acceptance criteria. Gemini 3.1 Pro validated with PASS verdict.
+
+## 2026-02-27 - Phase 0: Separate home.go Refactoring PR
+
+**Context**: Multi-model design review (Gemini 3.1 Pro advocate, Gemini 2.5 Pro challenger) identified risk in decomposing 9031-line home.go while simultaneously adding kanban features. Mixing refactoring with new logic makes it hard to isolate bugs.
+**Decision**: Add Phase 0 before all kanban phases. Phase 0 decomposes home.go into 7 kanban_*.go files, extracting existing logic only. Zero new features. App must be functionally identical. Merged as a separate PR before Phase 1 begins.
+**Consequences**: Isolates refactoring risk from feature risk. All subsequent phases modify the new files instead of creating them. Adds one extra PR but significantly reduces debugging complexity.
+
+## 2026-02-27 - Kanban Mode: Full Kanban Board (Approach 1)
+
+**Context**: User wants kanban board for agent-deck to manage AI coding agent sessions through a workflow: Backlog → Design → Plan → Implement → Review → Done. Three approaches evaluated: Full Kanban, Status Field Only, Hybrid. Five perspectives explored: Architect, Implementer, Devil's Advocate, User Advocate, Skill Designer. Three reference repos analyzed: agtx (Rust kanban), vibe-kanban (Rust+React), claude-vibekanban (Claude commands).
+**Decision**: Full Kanban (Approach 1) — 6-column kanban board with left sidebar, editable detail panel, skill-per-column auto-triggers, YOLO autonomous mode with zen MCP multi-model consensus gates.
+**Consequences**: Larger scope (7 phases) but full workflow visualization. Requires decomposing 9031-line home.go. 4 new skills to create. Terminal width constraint: 6 columns at ~15 chars each at 120-col terminal. Design doc: `docs/plans/2026-02-27-kanban-mode-design.md`.
+
+## 2026-02-27 - Separate KanbanColumn from Session Status
+
+**Context**: Session Status (running/waiting/idle/error) represents lifecycle state. Kanban column (Backlog/Design/Plan/Implement/Review/Done) represents workflow stage. These are independent dimensions.
+**Decision**: Add separate `KanbanColumn` field to Instance, not reuse existing `Status` enum. A session can be "running" in the "Design" column or "idle" in the "Backlog" column.
+**Consequences**: Clean separation of concerns. Requires new SQLite column. Existing status filtering still works independently.
+
+## 2026-02-27 - Enter=Attach, Space=Detail Panel
+
+**Context**: Need to decide what happens when user interacts with a kanban card. User wants Enter to attach to tmux (preserving existing mental model) and a separate key for the detail/preview panel.
+**Decision**: Enter attaches to the tmux session (consistent with existing agent-deck). Space toggles an editable detail panel (title, description, AC, status, worktree, model, etc). `e` enters edit mode within the panel.
+**Consequences**: Preserves muscle memory for Enter=open session. Space is non-destructive, natural for "show more". Edit mode requires explicit `e` key to prevent accidental edits.
+
+## 2026-02-27 - Review Skill Delegates Screenshots to Agent Team
+
+**Context**: Screenshots and visual review are token-heavy (1000+ tokens per screenshot, 15 screenshots = 15K tokens). Loading images into the main review coordinator would drain its context.
+**Decision**: agentic-ai-review uses an agent team. Chrome-visual agent (sonnet) handles ALL screenshots, gifs, and Lighthouse audits. Coordinator receives only text summaries + file paths, never raw images. Two-wave execution: Wave 1 (static-checks + chrome-visual in parallel), Wave 2 (e2e-tests + code-review in parallel).
+**Consequences**: Coordinator stays lightweight for synthesis. Chrome-visual agent absorbs all visual context cost in its own disposable context. Artifacts saved to `.agent-deck/review-screenshots/`.
+
+## 2026-02-27 - YOLO Mode with Zen Consensus Gates
+
+**Context**: User wants sessions to optionally progress through the kanban board autonomously without user interaction. Need multi-model validation to ensure quality at each column transition.
+**Decision**: YOLO mode spawns a Conductor agent that manages session progression. At each gate, uses `mcp__zen__consensus` with blinded multi-model validation (gemini-3.1-pro + gpt-5.2 + o3 for critical gates). File-based context (never inline large outputs), continuation IDs across gates for context revival, escalation to thinkdeep on mixed consensus.
+**Consequences**: Sessions can run overnight. Safety rails: unanimous consensus for Review→Done, max 3 retries per column, pause-on-fail. User can observe, pause, or override at any point. Alternative: Claude Code agent team gates for all-Claude validation.
+
+## 2026-02-27 - Zen Consensus Best Practices Integration
+
+**Context**: Zen/PAL MCP server has specific patterns for correct consensus usage. Incorrect usage (inlining large prompts, wrong step numbering) causes timeouts or corrupted results.
+**Decision**: Conductor follows PAL best practices exactly: (1) Never inline >50K char content — save to temp file, pass via `absolute_file_paths`. (2) Step 1 `step` field frozen as `original_proposal` sent to all models. (3) Steps 2+ `step` field = internal notes, NOT sent to models (blinded consensus). (4) Each (model, stance) pair must be unique. (5) `total_steps` = number of models. (6) Reuse `continuation_id` across all gates for same session. (7) Thinking mode scaled to gate severity (medium → high → max).
+**Consequences**: Reliable consensus gates that stay within MCP protocol limits. Blinded consensus ensures independent model opinions. Context revival allows long-running sessions across context resets.
+
+## 2026-02-27 - Self-Evolve: Markdown Files with Confidence Scoring
+
+**Context**: Need a learning mechanism that tracks repeated behaviors without ML complexity. Must be human-readable, editable, and resistant to learning bad patterns.
+**Decision**: Store learnings as markdown files in `~/.claude/learned/` organized by category (codebase-patterns, user-behaviors, testing-patterns, learned-behaviors). Confidence scoring: HIGH (auto-apply), MEDIUM (suggest to user), LOW (store for review). Cross-validate against existing rules and CLAUDE.md. User review triggered on confidence drops, contradictions, or every 30 days.
+**Consequences**: Simple, transparent, version-controllable. No ML dependencies. Bad patterns caught by confidence scoring + cross-validation. Users can edit/delete any learning.
+
+## Previous Decisions (2026-02-22 and earlier)
+
 ## 2026-02-22 - Skill Directory Format for Claude Code Discovery
 
 **Context**: `EnsureSudoSkill()` wrote the operating-in-vagrant skill as a standalone `operating-in-vagrant.md` file. Claude Code v2.1.50 only discovers skills as directories with `SKILL.md` as entrypoint (`<skill-name>/SKILL.md`). The standalone file was invisible to Claude Code.

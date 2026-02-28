@@ -1,0 +1,636 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<agentPlan>
+  <meta>
+    <title>Kanban Mode — Agent Team Plan</title>
+    <created>2026-02-27</created>
+    <sourcePlan>docs/plans/2026-02-27-kanban-mode-design.md</sourcePlan>
+    <goal>Add 6-column kanban board to agent-deck for managing AI coding agent sessions through a development workflow with skill automation and autonomous YOLO mode</goal>
+    <architecture>Go 1.24 TUI with Bubble Tea + lipgloss, SQLite persistence, message-driven Elm architecture, 3-tier config, zen MCP consensus gates</architecture>
+    <techStack>
+      <technology>Go 1.24</technology>
+      <technology>Bubble Tea v1.3.10</technology>
+      <technology>lipgloss v1.1.0</technology>
+      <technology>SQLite</technology>
+      <technology>tmux</technology>
+      <technology>zen MCP</technology>
+    </techStack>
+    <totalTasks>24</totalTasks>
+    <totalWaves>6</totalWaves>
+    <averageParallelism>4.0</averageParallelism>
+    <maxParallelism>6</maxParallelism>
+    <criticalPathLength>14</criticalPathLength>
+  </meta>
+
+  <dependencyGraph>
+    <description>Phase 0 → Phase 1 → Phase 2 → (Phase 3 ‖ Phase 4) → Phase 5 → (Phase 6 ‖ Phase 7)</description>
+    <waves>
+      <wave number="1" name="Foundation">
+        <tasks>
+          <taskRef id="task-0.1"/>
+          <taskRef id="task-0.2"/>
+          <taskRef id="task-0.3"/>
+        </tasks>
+        <checkpoint type="user-review">
+          <message>Wave 1 complete. Review home.go decomposition — 7 new files, all tests pass, zero behavioral changes. Separate PR.</message>
+          <reviewItems>
+            <item>7 new kanban_*.go files</item>
+            <item>home.go reduced line count</item>
+            <item>all existing tests pass</item>
+            <item>go vet clean</item>
+          </reviewItems>
+          <manualActions>
+            <action>Create PR for Phase 0 refactoring</action>
+            <action>Merge before proceeding</action>
+          </manualActions>
+        </checkpoint>
+        <qualityGates>
+          <gate>code-review</gate>
+          <gate>build-verification</gate>
+        </qualityGates>
+      </wave>
+
+      <wave number="2" name="Data Layer">
+        <tasks>
+          <taskRef id="task-1.1"/>
+          <taskRef id="task-1.2"/>
+          <taskRef id="task-1.3"/>
+        </tasks>
+        <checkpoint type="user-review">
+          <message>Wave 2 complete. Review schema design — new Instance fields, migration SQL, CRUD methods.</message>
+          <reviewItems>
+            <item>migration SQL statements</item>
+            <item>Instance struct changes</item>
+            <item>CRUD method signatures</item>
+          </reviewItems>
+        </checkpoint>
+        <qualityGates>
+          <gate>code-review</gate>
+        </qualityGates>
+      </wave>
+
+      <wave number="3" name="Board UI">
+        <tasks>
+          <taskRef id="task-2.1"/>
+          <taskRef id="task-2.2"/>
+          <taskRef id="task-2.3"/>
+          <taskRef id="task-2.4"/>
+        </tasks>
+        <checkpoint type="user-review">
+          <message>Wave 3 complete. Build binary and visually verify board rendering.</message>
+          <reviewItems>
+            <item>6-column layout at different widths</item>
+            <item>card rendering with status icons</item>
+            <item>sidebar group list</item>
+            <item>kanban mode toggle</item>
+          </reviewItems>
+          <manualActions>
+            <action>Rebuild binary: go build -o build/agent-deck ./cmd/agent-deck/</action>
+            <action>Manual visual testing</action>
+          </manualActions>
+        </checkpoint>
+        <qualityGates>
+          <gate>code-review</gate>
+          <gate>build-verification</gate>
+        </qualityGates>
+      </wave>
+
+      <wave number="4" name="Navigation and Detail">
+        <tasks>
+          <taskRef id="task-3.1"/>
+          <taskRef id="task-3.2"/>
+          <taskRef id="task-4.1"/>
+          <taskRef id="task-4.2"/>
+        </tasks>
+        <checkpoint type="user-review">
+          <message>Wave 4 complete. Test all keyboard navigation end-to-end. Verify detail panel fields and edit mode.</message>
+          <reviewItems>
+            <item>h/j/k/l navigation</item>
+            <item>Tab focus cycling</item>
+            <item>1-6 column jump</item>
+            <item>Space detail toggle</item>
+            <item>e edit mode</item>
+            <item>vertical scroll</item>
+          </reviewItems>
+          <manualActions>
+            <action>Rebuild and manually test keyboard navigation</action>
+          </manualActions>
+        </checkpoint>
+        <qualityGates>
+          <gate>code-review</gate>
+        </qualityGates>
+      </wave>
+
+      <wave number="5" name="Transitions">
+        <tasks>
+          <taskRef id="task-5.1"/>
+          <taskRef id="task-5.2"/>
+          <taskRef id="task-5.3"/>
+        </tasks>
+        <checkpoint type="user-review">
+          <message>Wave 5 complete. Review transition rules, config resolution, skill triggers, and rollback.</message>
+          <reviewItems>
+            <item>TransitionEngine interface</item>
+            <item>3-tier config resolution</item>
+            <item>skill trigger flow</item>
+            <item>rollback behavior</item>
+            <item>YAML config format</item>
+          </reviewItems>
+          <manualActions>
+            <action>Test skill triggers with a real session</action>
+          </manualActions>
+        </checkpoint>
+        <qualityGates>
+          <gate>code-review</gate>
+          <gate>security-review</gate>
+        </qualityGates>
+      </wave>
+
+      <wave number="6" name="Automation and Skills">
+        <tasks>
+          <taskRef id="task-6.1"/>
+          <taskRef id="task-6.2"/>
+          <taskRef id="task-6.3"/>
+          <taskRef id="task-7.1"/>
+          <taskRef id="task-7.2"/>
+          <taskRef id="task-7.3"/>
+          <taskRef id="task-7.4"/>
+        </tasks>
+        <checkpoint type="user-review">
+          <message>Wave 6 complete. Full end-to-end review: YOLO mode, consensus gates, all 4 skills.</message>
+          <reviewItems>
+            <item>Conductor lifecycle</item>
+            <item>zen consensus gates</item>
+            <item>YOLO UI indicators</item>
+            <item>agentic-ai-backlog skill</item>
+            <item>agentic-ai-review skill</item>
+            <item>agentic-ai-done skill</item>
+            <item>self-evolve skill</item>
+          </reviewItems>
+          <manualActions>
+            <action>Full manual E2E test of YOLO mode</action>
+            <action>Test each skill independently</action>
+          </manualActions>
+        </checkpoint>
+        <qualityGates>
+          <gate>code-review</gate>
+          <gate>security-review</gate>
+          <gate>build-verification</gate>
+        </qualityGates>
+      </wave>
+    </waves>
+  </dependencyGraph>
+
+  <phases>
+    <phase id="phase-0" name="Refactor">
+      <task id="task-0.1" name="Analyze home.go extraction boundaries">
+        <files><read>internal/ui/home.go</read></files>
+        <steps>
+          <step number="1"><action>Read all 9031 lines of home.go, catalog functions/types/methods</action></step>
+          <step number="2"><action>Identify logical groupings for extraction</action></step>
+          <step number="3"><action>Map each group to target kanban_*.go file</action></step>
+          <step number="4"><action>Identify shared state that must stay in home.go</action></step>
+          <step number="5"><action>Document extraction plan with function-to-file mapping</action></step>
+          <step number="6"><action>Plan stub files for kanban_transition.go and kanban_conductor.go</action></step>
+        </steps>
+        <agentOrchestration>
+          <model rationale="Deep analysis of 9031-line file">opus</model>
+          <delegateTo><agent>architect</agent></delegateTo>
+          <permissionMode>default</permissionMode>
+          <estimatedComplexity>high</estimatedComplexity>
+          <wave>1</wave>
+          <blockedBy/>
+        </agentOrchestration>
+        <progressTracking totalSteps="6" completedSteps="0" percentage="0" status="pending">
+          <activeForm>Analyzing home.go extraction boundaries</activeForm>
+        </progressTracking>
+      </task>
+
+      <task id="task-0.2" name="Execute home.go decomposition">
+        <files>
+          <create>internal/ui/kanban_board.go</create>
+          <create>internal/ui/kanban_card.go</create>
+          <create>internal/ui/kanban_sidebar.go</create>
+          <create>internal/ui/kanban_detail.go</create>
+          <create>internal/ui/kanban_nav.go</create>
+          <create>internal/ui/kanban_transition.go</create>
+          <create>internal/ui/kanban_conductor.go</create>
+          <modify>internal/ui/home.go</modify>
+        </files>
+        <steps>
+          <step number="1"><action>Create kanban_sidebar.go — extract sidebar rendering</action></step>
+          <step number="2"><action>Create kanban_board.go — extract board layout</action></step>
+          <step number="3"><action>Create kanban_card.go — extract card rendering</action></step>
+          <step number="4"><action>Create kanban_nav.go — extract navigation logic</action></step>
+          <step number="5"><action>Create kanban_detail.go — extract detail panel</action></step>
+          <step number="6"><action>Create kanban_transition.go — stubs</action></step>
+          <step number="7"><action>Create kanban_conductor.go — stubs</action></step>
+          <step number="8"><action>Update home.go imports and references</action></step>
+          <step number="9"><action>Verify compilation</action><command>go build ./...</command></step>
+        </steps>
+        <agentOrchestration>
+          <model rationale="Standard refactoring with clear plan">sonnet</model>
+          <delegateTo><agent>refactor-expert</agent><agent>golang-pro</agent></delegateTo>
+          <permissionMode>acceptEdits</permissionMode>
+          <estimatedComplexity>high</estimatedComplexity>
+          <wave>1</wave>
+          <blockedBy><taskRef id="task-0.1"/></blockedBy>
+        </agentOrchestration>
+        <progressTracking totalSteps="9" completedSteps="0" percentage="0" status="pending">
+          <activeForm>Decomposing home.go into kanban modules</activeForm>
+        </progressTracking>
+      </task>
+
+      <task id="task-0.3" name="Verify functional equivalence">
+        <files/>
+        <steps>
+          <step number="1"><action>Build binary</action><command>go build -o build/agent-deck ./cmd/agent-deck/</command></step>
+          <step number="2"><action>Run all tests</action><command>go test ./... -count=1 -short</command></step>
+          <step number="3"><action>Run vet</action><command>go vet ./...</command></step>
+          <step number="4"><action>Verify line counts</action><command>wc -l internal/ui/home.go internal/ui/kanban_*.go</command></step>
+          <step number="5"><action>Fix any failures and re-verify</action></step>
+        </steps>
+        <agentOrchestration>
+          <model rationale="Simple verification commands">haiku</model>
+          <delegateTo><agent>build-error-resolver</agent></delegateTo>
+          <permissionMode>acceptEdits</permissionMode>
+          <estimatedComplexity>low</estimatedComplexity>
+          <wave>1</wave>
+          <blockedBy><taskRef id="task-0.2"/></blockedBy>
+        </agentOrchestration>
+        <progressTracking totalSteps="5" completedSteps="0" percentage="0" status="pending">
+          <activeForm>Verifying functional equivalence</activeForm>
+        </progressTracking>
+      </task>
+    </phase>
+
+    <phase id="phase-1" name="Data Layer">
+      <task id="task-1.1" name="Define KanbanColumn type + Instance fields">
+        <files><modify>internal/session/instance.go</modify><test>internal/session/instance_test.go</test></files>
+        <agentOrchestration>
+          <model rationale="Standard TDD implementation">sonnet</model>
+          <delegateTo><agent>tdd-guide</agent><agent>golang-pro</agent></delegateTo>
+          <skills><skill>tdd-workflow</skill></skills>
+          <permissionMode>acceptEdits</permissionMode>
+          <estimatedComplexity>medium</estimatedComplexity>
+          <wave>2</wave>
+          <canParallelWith><taskRef id="task-1.2"/></canParallelWith>
+        </agentOrchestration>
+        <progressTracking totalSteps="7" completedSteps="0" percentage="0" status="pending">
+          <activeForm>Defining KanbanColumn type and Instance fields</activeForm>
+        </progressTracking>
+      </task>
+
+      <task id="task-1.2" name="Create SQLite migrations">
+        <files><modify>internal/session/migration.go</modify><modify>internal/session/storage.go</modify><test>internal/session/storage_test.go</test></files>
+        <agentOrchestration>
+          <model rationale="Database migration — user reviews SQL">sonnet</model>
+          <delegateTo><agent>tdd-guide</agent><agent>golang-pro</agent></delegateTo>
+          <skills><skill>tdd-workflow</skill></skills>
+          <permissionMode>default</permissionMode>
+          <estimatedComplexity>medium</estimatedComplexity>
+          <wave>2</wave>
+          <canParallelWith><taskRef id="task-1.1"/></canParallelWith>
+        </agentOrchestration>
+        <progressTracking totalSteps="6" completedSteps="0" percentage="0" status="pending">
+          <activeForm>Creating SQLite migrations for kanban tables</activeForm>
+        </progressTracking>
+      </task>
+
+      <task id="task-1.3" name="Add CRUD methods + GroupKanbanConfig persistence">
+        <files><modify>internal/session/storage.go</modify><test>internal/session/storage_test.go</test></files>
+        <agentOrchestration>
+          <model rationale="Standard CRUD on existing storage patterns">sonnet</model>
+          <delegateTo><agent>tdd-guide</agent><agent>golang-pro</agent></delegateTo>
+          <skills><skill>tdd-workflow</skill></skills>
+          <permissionMode>acceptEdits</permissionMode>
+          <estimatedComplexity>medium</estimatedComplexity>
+          <wave>2</wave>
+          <blockedBy><taskRef id="task-1.1"/><taskRef id="task-1.2"/></blockedBy>
+        </agentOrchestration>
+        <progressTracking totalSteps="7" completedSteps="0" percentage="0" status="pending">
+          <activeForm>Implementing CRUD methods for kanban data</activeForm>
+        </progressTracking>
+      </task>
+    </phase>
+
+    <phase id="phase-2" name="Board UI">
+      <task id="task-2.1" name="Implement KanbanBoard component">
+        <files><modify>internal/ui/kanban_board.go</modify><test>internal/ui/kanban_board_test.go</test></files>
+        <agentOrchestration>
+          <model rationale="UI component with TDD">sonnet</model>
+          <delegateTo><agent>tdd-guide</agent><agent>golang-pro</agent></delegateTo>
+          <mcpTools><optional><tool purpose="Bubble Tea docs">context7</tool></optional></mcpTools>
+          <skills><skill>tdd-workflow</skill></skills>
+          <permissionMode>acceptEdits</permissionMode>
+          <estimatedComplexity>medium</estimatedComplexity>
+          <wave>3</wave>
+          <canParallelWith><taskRef id="task-2.2"/><taskRef id="task-2.3"/></canParallelWith>
+        </agentOrchestration>
+        <progressTracking totalSteps="7" completedSteps="0" percentage="0" status="pending">
+          <activeForm>Implementing KanbanBoard 6-column layout</activeForm>
+        </progressTracking>
+      </task>
+
+      <task id="task-2.2" name="Implement KanbanCard component">
+        <files><modify>internal/ui/kanban_card.go</modify><test>internal/ui/kanban_card_test.go</test></files>
+        <agentOrchestration>
+          <model rationale="UI component">sonnet</model>
+          <delegateTo><agent>tdd-guide</agent><agent>golang-pro</agent></delegateTo>
+          <skills><skill>tdd-workflow</skill></skills>
+          <permissionMode>acceptEdits</permissionMode>
+          <estimatedComplexity>medium</estimatedComplexity>
+          <wave>3</wave>
+          <canParallelWith><taskRef id="task-2.1"/><taskRef id="task-2.3"/></canParallelWith>
+        </agentOrchestration>
+        <progressTracking totalSteps="6" completedSteps="0" percentage="0" status="pending">
+          <activeForm>Implementing KanbanCard rendering</activeForm>
+        </progressTracking>
+      </task>
+
+      <task id="task-2.3" name="Implement KanbanSidebar component">
+        <files><modify>internal/ui/kanban_sidebar.go</modify><test>internal/ui/kanban_sidebar_test.go</test></files>
+        <agentOrchestration>
+          <model rationale="UI component">sonnet</model>
+          <delegateTo><agent>tdd-guide</agent><agent>golang-pro</agent></delegateTo>
+          <skills><skill>tdd-workflow</skill></skills>
+          <permissionMode>acceptEdits</permissionMode>
+          <estimatedComplexity>medium</estimatedComplexity>
+          <wave>3</wave>
+          <canParallelWith><taskRef id="task-2.1"/><taskRef id="task-2.2"/></canParallelWith>
+        </agentOrchestration>
+        <progressTracking totalSteps="6" completedSteps="0" percentage="0" status="pending">
+          <activeForm>Implementing KanbanSidebar group list</activeForm>
+        </progressTracking>
+      </task>
+
+      <task id="task-2.4" name="Integrate kanban into home.go routing">
+        <files><modify>internal/ui/home.go</modify><test>internal/ui/home_test.go</test></files>
+        <agentOrchestration>
+          <model rationale="Integration across components">sonnet</model>
+          <delegateTo><agent>tdd-guide</agent><agent>golang-pro</agent><agent>code-reviewer</agent></delegateTo>
+          <skills><skill>tdd-workflow</skill></skills>
+          <permissionMode>acceptEdits</permissionMode>
+          <estimatedComplexity>high</estimatedComplexity>
+          <wave>3</wave>
+          <blockedBy><taskRef id="task-2.1"/><taskRef id="task-2.2"/><taskRef id="task-2.3"/></blockedBy>
+        </agentOrchestration>
+        <progressTracking totalSteps="7" completedSteps="0" percentage="0" status="pending">
+          <activeForm>Integrating kanban mode into home.go</activeForm>
+        </progressTracking>
+      </task>
+    </phase>
+
+    <phase id="phase-3" name="Navigation">
+      <task id="task-3.1" name="Implement KanbanNav 2D cursor">
+        <files><modify>internal/ui/kanban_nav.go</modify><test>internal/ui/kanban_nav_test.go</test></files>
+        <agentOrchestration>
+          <model rationale="State machine — needs careful boundary handling">sonnet</model>
+          <delegateTo><agent>tdd-guide</agent><agent>golang-pro</agent></delegateTo>
+          <skills><skill>tdd-workflow</skill></skills>
+          <permissionMode>acceptEdits</permissionMode>
+          <estimatedComplexity>high</estimatedComplexity>
+          <wave>4</wave>
+          <canParallelWith><taskRef id="task-4.1"/></canParallelWith>
+        </agentOrchestration>
+        <progressTracking totalSteps="8" completedSteps="0" percentage="0" status="pending">
+          <activeForm>Implementing 2D cursor navigation</activeForm>
+        </progressTracking>
+      </task>
+
+      <task id="task-3.2" name="Add vertical scroll within columns">
+        <files><modify>internal/ui/kanban_nav.go</modify><modify>internal/ui/kanban_board.go</modify></files>
+        <agentOrchestration>
+          <model rationale="Scroll behavior extension">sonnet</model>
+          <delegateTo><agent>tdd-guide</agent><agent>golang-pro</agent></delegateTo>
+          <skills><skill>tdd-workflow</skill></skills>
+          <permissionMode>acceptEdits</permissionMode>
+          <estimatedComplexity>medium</estimatedComplexity>
+          <wave>4</wave>
+          <blockedBy><taskRef id="task-3.1"/></blockedBy>
+        </agentOrchestration>
+        <progressTracking totalSteps="6" completedSteps="0" percentage="0" status="pending">
+          <activeForm>Adding vertical scroll to columns</activeForm>
+        </progressTracking>
+      </task>
+    </phase>
+
+    <phase id="phase-4" name="Detail Panel">
+      <task id="task-4.1" name="Implement KanbanDetail panel">
+        <files><modify>internal/ui/kanban_detail.go</modify><test>internal/ui/kanban_detail_test.go</test></files>
+        <agentOrchestration>
+          <model rationale="UI component">sonnet</model>
+          <delegateTo><agent>tdd-guide</agent><agent>golang-pro</agent></delegateTo>
+          <skills><skill>tdd-workflow</skill></skills>
+          <permissionMode>acceptEdits</permissionMode>
+          <estimatedComplexity>medium</estimatedComplexity>
+          <wave>4</wave>
+          <canParallelWith><taskRef id="task-3.1"/></canParallelWith>
+        </agentOrchestration>
+        <progressTracking totalSteps="6" completedSteps="0" percentage="0" status="pending">
+          <activeForm>Implementing KanbanDetail panel</activeForm>
+        </progressTracking>
+      </task>
+
+      <task id="task-4.2" name="Implement edit mode for detail panel">
+        <files><modify>internal/ui/kanban_detail.go</modify></files>
+        <agentOrchestration>
+          <model rationale="Edit behavior with persistence">sonnet</model>
+          <delegateTo><agent>tdd-guide</agent><agent>golang-pro</agent></delegateTo>
+          <skills><skill>tdd-workflow</skill></skills>
+          <permissionMode>acceptEdits</permissionMode>
+          <estimatedComplexity>medium</estimatedComplexity>
+          <wave>4</wave>
+          <blockedBy><taskRef id="task-4.1"/></blockedBy>
+        </agentOrchestration>
+        <progressTracking totalSteps="7" completedSteps="0" percentage="0" status="pending">
+          <activeForm>Implementing edit mode for detail fields</activeForm>
+        </progressTracking>
+      </task>
+    </phase>
+
+    <phase id="phase-5" name="Transitions">
+      <task id="task-5.1" name="Implement TransitionEngine interface">
+        <files><modify>internal/ui/kanban_transition.go</modify><test>internal/ui/kanban_transition_test.go</test></files>
+        <agentOrchestration>
+          <model rationale="Interface design + core logic">sonnet</model>
+          <delegateTo><agent>tdd-guide</agent><agent>golang-pro</agent></delegateTo>
+          <skills><skill>tdd-workflow</skill></skills>
+          <permissionMode>acceptEdits</permissionMode>
+          <estimatedComplexity>medium</estimatedComplexity>
+          <wave>5</wave>
+        </agentOrchestration>
+        <progressTracking totalSteps="6" completedSteps="0" percentage="0" status="pending">
+          <activeForm>Implementing TransitionEngine interface</activeForm>
+        </progressTracking>
+      </task>
+
+      <task id="task-5.2" name="Implement 3-tier config resolution">
+        <files><modify>internal/ui/kanban_transition.go</modify></files>
+        <agentOrchestration>
+          <model rationale="Config system with YAML parsing">sonnet</model>
+          <delegateTo><agent>tdd-guide</agent><agent>golang-pro</agent></delegateTo>
+          <skills><skill>tdd-workflow</skill></skills>
+          <permissionMode>acceptEdits</permissionMode>
+          <estimatedComplexity>medium</estimatedComplexity>
+          <wave>5</wave>
+          <blockedBy><taskRef id="task-5.1"/></blockedBy>
+        </agentOrchestration>
+        <progressTracking totalSteps="5" completedSteps="0" percentage="0" status="pending">
+          <activeForm>Implementing 3-tier config resolution</activeForm>
+        </progressTracking>
+      </task>
+
+      <task id="task-5.3" name="Implement skill triggers + rollback">
+        <files><modify>internal/ui/kanban_transition.go</modify><modify>internal/ui/home.go</modify></files>
+        <agentOrchestration>
+          <model rationale="Async execution with rollback">sonnet</model>
+          <delegateTo><agent>tdd-guide</agent><agent>golang-pro</agent><agent>code-reviewer</agent></delegateTo>
+          <skills><skill>tdd-workflow</skill></skills>
+          <permissionMode>acceptEdits</permissionMode>
+          <estimatedComplexity>high</estimatedComplexity>
+          <wave>5</wave>
+          <blockedBy><taskRef id="task-5.2"/></blockedBy>
+        </agentOrchestration>
+        <progressTracking totalSteps="8" completedSteps="0" percentage="0" status="pending">
+          <activeForm>Implementing skill triggers and rollback</activeForm>
+        </progressTracking>
+      </task>
+    </phase>
+
+    <phase id="phase-6" name="Conductor">
+      <task id="task-6.1" name="Implement Conductor lifecycle">
+        <files><modify>internal/ui/kanban_conductor.go</modify><test>internal/ui/kanban_conductor_test.go</test><read>internal/session/conductor.go</read></files>
+        <agentOrchestration>
+          <model rationale="Complex orchestration requiring deep reasoning">opus</model>
+          <delegateTo><agent>tdd-guide</agent><agent>golang-pro</agent><agent>architect</agent></delegateTo>
+          <mcpTools><optional><tool purpose="Consensus gate design reference">zen</tool></optional></mcpTools>
+          <skills><skill>tdd-workflow</skill></skills>
+          <permissionMode>default</permissionMode>
+          <estimatedComplexity>high</estimatedComplexity>
+          <wave>6</wave>
+        </agentOrchestration>
+        <progressTracking totalSteps="8" completedSteps="0" percentage="0" status="pending">
+          <activeForm>Implementing Conductor agent lifecycle</activeForm>
+        </progressTracking>
+      </task>
+
+      <task id="task-6.2" name="Implement zen consensus gate protocol">
+        <files><modify>internal/ui/kanban_conductor.go</modify></files>
+        <agentOrchestration>
+          <model rationale="Complex MCP integration with blinded consensus">opus</model>
+          <delegateTo><agent>tdd-guide</agent><agent>golang-pro</agent></delegateTo>
+          <mcpTools><required><tool purpose="Consensus gates and escalation">zen</tool></required></mcpTools>
+          <skills><skill>tdd-workflow</skill></skills>
+          <permissionMode>default</permissionMode>
+          <estimatedComplexity>high</estimatedComplexity>
+          <wave>6</wave>
+          <blockedBy><taskRef id="task-6.1"/></blockedBy>
+          <canParallelWith><taskRef id="task-6.3"/><taskRef id="task-7.1"/><taskRef id="task-7.2"/><taskRef id="task-7.3"/><taskRef id="task-7.4"/></canParallelWith>
+        </agentOrchestration>
+        <progressTracking totalSteps="9" completedSteps="0" percentage="0" status="pending">
+          <activeForm>Implementing zen consensus gate protocol</activeForm>
+        </progressTracking>
+      </task>
+
+      <task id="task-6.3" name="Implement YOLO UI indicators">
+        <files><modify>internal/ui/kanban_card.go</modify><modify>internal/ui/kanban_conductor.go</modify></files>
+        <agentOrchestration>
+          <model rationale="UI indicator work">sonnet</model>
+          <delegateTo><agent>tdd-guide</agent><agent>golang-pro</agent></delegateTo>
+          <skills><skill>tdd-workflow</skill></skills>
+          <permissionMode>acceptEdits</permissionMode>
+          <estimatedComplexity>medium</estimatedComplexity>
+          <wave>6</wave>
+          <blockedBy><taskRef id="task-6.1"/></blockedBy>
+          <canParallelWith><taskRef id="task-6.2"/><taskRef id="task-7.1"/><taskRef id="task-7.2"/><taskRef id="task-7.3"/><taskRef id="task-7.4"/></canParallelWith>
+        </agentOrchestration>
+        <progressTracking totalSteps="6" completedSteps="0" percentage="0" status="pending">
+          <activeForm>Implementing YOLO UI indicators</activeForm>
+        </progressTracking>
+      </task>
+    </phase>
+
+    <phase id="phase-7" name="Skills">
+      <task id="task-7.1" name="Create agentic-ai-backlog skill">
+        <files>
+          <create>~/.claude/skills/agentic-ai-backlog/SKILL.md</create>
+          <create>~/.claude/skills/agentic-ai-backlog/references/debt-detection-patterns.md</create>
+          <create>~/.claude/skills/agentic-ai-backlog/references/security-checklist.md</create>
+          <create>~/.claude/skills/agentic-ai-backlog/references/performance-metrics.md</create>
+          <create>~/.claude/skills/agentic-ai-backlog/references/prioritization-matrix.md</create>
+        </files>
+        <agentOrchestration>
+          <model rationale="Skill file creation">sonnet</model>
+          <permissionMode>acceptEdits</permissionMode>
+          <estimatedComplexity>medium</estimatedComplexity>
+          <wave>6</wave>
+          <canParallelWith><taskRef id="task-6.2"/><taskRef id="task-6.3"/><taskRef id="task-7.2"/><taskRef id="task-7.3"/><taskRef id="task-7.4"/></canParallelWith>
+        </agentOrchestration>
+        <progressTracking totalSteps="6" completedSteps="0" percentage="0" status="pending">
+          <activeForm>Creating agentic-ai-backlog skill</activeForm>
+        </progressTracking>
+      </task>
+
+      <task id="task-7.2" name="Create agentic-ai-review skill">
+        <files>
+          <create>~/.claude/skills/agentic-ai-review/SKILL.md</create>
+          <create>~/.claude/skills/agentic-ai-review/references/agent-team-guidelines.md</create>
+          <create>~/.claude/skills/agentic-ai-review/references/chrome-review-guide.md</create>
+          <create>~/.claude/skills/agentic-ai-review/references/ui-detection-rules.md</create>
+          <create>~/.claude/skills/agentic-ai-review/references/e2e-test-requirements.md</create>
+          <create>~/.claude/skills/agentic-ai-review/references/quality-gates.md</create>
+        </files>
+        <agentOrchestration>
+          <model rationale="Complex agent team architecture in skill">sonnet</model>
+          <permissionMode>acceptEdits</permissionMode>
+          <estimatedComplexity>high</estimatedComplexity>
+          <wave>6</wave>
+          <canParallelWith><taskRef id="task-6.2"/><taskRef id="task-6.3"/><taskRef id="task-7.1"/><taskRef id="task-7.3"/><taskRef id="task-7.4"/></canParallelWith>
+        </agentOrchestration>
+        <progressTracking totalSteps="8" completedSteps="0" percentage="0" status="pending">
+          <activeForm>Creating agentic-ai-review skill</activeForm>
+        </progressTracking>
+      </task>
+
+      <task id="task-7.3" name="Create agentic-ai-done skill">
+        <files>
+          <create>~/.claude/skills/agentic-ai-done/SKILL.md</create>
+          <create>~/.claude/skills/agentic-ai-done/references/merge-conflict-resolution.md</create>
+          <create>~/.claude/skills/agentic-ai-done/references/semver-rules.md</create>
+          <create>~/.claude/skills/agentic-ai-done/references/changelog-format.md</create>
+          <create>~/.claude/skills/agentic-ai-done/references/merge-strategies.md</create>
+        </files>
+        <agentOrchestration>
+          <model rationale="Safety protocol design">sonnet</model>
+          <permissionMode>acceptEdits</permissionMode>
+          <estimatedComplexity>medium</estimatedComplexity>
+          <wave>6</wave>
+          <canParallelWith><taskRef id="task-6.2"/><taskRef id="task-6.3"/><taskRef id="task-7.1"/><taskRef id="task-7.2"/><taskRef id="task-7.4"/></canParallelWith>
+        </agentOrchestration>
+        <progressTracking totalSteps="6" completedSteps="0" percentage="0" status="pending">
+          <activeForm>Creating agentic-ai-done skill</activeForm>
+        </progressTracking>
+      </task>
+
+      <task id="task-7.4" name="Create self-evolve skill">
+        <files>
+          <create>~/.claude/skills/self-evolve/SKILL.md</create>
+          <create>~/.claude/skills/self-evolve/references/pattern-recognition.md</create>
+          <create>~/.claude/skills/self-evolve/references/learning-categories.md</create>
+          <create>~/.claude/skills/self-evolve/references/anti-pattern-detection.md</create>
+          <create>~/.claude/skills/self-evolve/references/suggestion-templates.md</create>
+        </files>
+        <agentOrchestration>
+          <model rationale="Learning system design">sonnet</model>
+          <permissionMode>acceptEdits</permissionMode>
+          <estimatedComplexity>medium</estimatedComplexity>
+          <wave>6</wave>
+          <canParallelWith><taskRef id="task-6.2"/><taskRef id="task-6.3"/><taskRef id="task-7.1"/><taskRef id="task-7.2"/><taskRef id="task-7.3"/></canParallelWith>
+        </agentOrchestration>
+        <progressTracking totalSteps="6" completedSteps="0" percentage="0" status="pending">
+          <activeForm>Creating self-evolve skill</activeForm>
+        </progressTracking>
+      </task>
+    </phase>
+  </phases>
+</agentPlan>

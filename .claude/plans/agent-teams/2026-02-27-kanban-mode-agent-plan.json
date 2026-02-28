@@ -1,0 +1,1053 @@
+{
+  "meta": {
+    "title": "Kanban Mode — Agent Team Plan",
+    "created": "2026-02-27",
+    "sourcePlan": "docs/plans/2026-02-27-kanban-mode-design.md",
+    "goal": "Add 6-column kanban board to agent-deck for managing AI coding agent sessions through a development workflow with skill automation and autonomous YOLO mode",
+    "architecture": "Go 1.24 TUI with Bubble Tea + lipgloss, SQLite persistence, message-driven Elm architecture, 3-tier config, zen MCP consensus gates",
+    "techStack": ["Go 1.24", "Bubble Tea v1.3.10", "lipgloss v1.1.0", "SQLite", "tmux", "zen MCP"],
+    "totalTasks": 28,
+    "totalWaves": 6,
+    "averageParallelism": 4.0,
+    "maxParallelism": 6,
+    "criticalPathLength": 16
+  },
+  "dependencyGraph": {
+    "description": "Phase 0 → Phase 1 → Phase 2 → (Phase 3 ‖ Phase 4) → Phase 5 → (Phase 6 ‖ Phase 7)",
+    "waves": [
+      {
+        "wave": 1,
+        "name": "Foundation",
+        "tasks": ["task-0.1", "task-0.2", "task-0.3"],
+        "parallelism": 1,
+        "checkpoint": {
+          "type": "user-review",
+          "message": "Wave 1 complete. Review home.go decomposition — 7 new files, all tests pass, zero behavioral changes. This is a separate PR.",
+          "reviewItems": ["7 new kanban_*.go files", "home.go reduced line count", "all existing tests pass", "go vet clean"],
+          "manualActions": ["Create PR for Phase 0 refactoring", "Merge before proceeding"]
+        },
+        "qualityGates": ["code-review", "build-verification"]
+      },
+      {
+        "wave": 2,
+        "name": "Data Layer",
+        "tasks": ["task-1.1", "task-1.2", "task-1.3", "task-1.4", "task-1.5"],
+        "parallelism": 2,
+        "checkpoint": {
+          "type": "user-review",
+          "message": "Wave 2 complete. Review schema design — new Instance fields, migration SQL, CRUD methods, message types, sort order. Verify migration runs on existing databases.",
+          "reviewItems": ["migration SQL statements", "Instance struct changes", "CRUD method signatures", "22 Bubble Tea message types", "sort order formula"],
+          "manualActions": []
+        },
+        "qualityGates": ["code-review"]
+      },
+      {
+        "wave": 3,
+        "name": "Board UI",
+        "tasks": ["task-2.1", "task-2.2", "task-2.3", "task-2.4"],
+        "parallelism": 3,
+        "checkpoint": {
+          "type": "user-review",
+          "message": "Wave 3 complete. Build binary and visually verify board rendering at 120-col and 80-col terminal widths.",
+          "reviewItems": ["6-column layout at different widths", "card rendering with status icons", "sidebar group list", "kanban mode toggle"],
+          "manualActions": ["Rebuild binary: go build -o build/agent-deck ./cmd/agent-deck/", "Manual visual testing"]
+        },
+        "qualityGates": ["code-review", "build-verification"]
+      },
+      {
+        "wave": 4,
+        "name": "Navigation & Detail",
+        "tasks": ["task-3.1", "task-3.2", "task-3.3", "task-3.4", "task-4.1", "task-4.2"],
+        "parallelism": 2,
+        "checkpoint": {
+          "type": "user-review",
+          "message": "Wave 4 complete. Test all keyboard navigation end-to-end. Verify detail panel fields and edit mode. Test n/d/m card interactions.",
+          "reviewItems": ["h/j/k/l navigation", "Tab focus cycling", "1-6 column jump", "Space detail toggle", "e edit mode", "vertical scroll", "n create session", "d delete session", "m move card"],
+          "manualActions": ["Rebuild and manually test keyboard navigation"]
+        },
+        "qualityGates": ["code-review"]
+      },
+      {
+        "wave": 5,
+        "name": "Transitions",
+        "tasks": ["task-5.1", "task-5.2", "task-5.3"],
+        "parallelism": 1,
+        "checkpoint": {
+          "type": "user-review",
+          "message": "Wave 5 complete. Review transition rules, config resolution, skill triggers, and rollback. Test forward and backward moves.",
+          "reviewItems": ["TransitionEngine interface", "3-tier config resolution", "skill trigger flow", "rollback behavior", "YAML config format"],
+          "manualActions": ["Test skill triggers with a real session"]
+        },
+        "qualityGates": ["code-review", "security-review"]
+      },
+      {
+        "wave": 6,
+        "name": "Automation & Skills",
+        "tasks": ["task-6.1", "task-6.2", "task-6.3", "task-7.1", "task-7.2", "task-7.3", "task-7.4"],
+        "parallelism": 6,
+        "checkpoint": {
+          "type": "user-review",
+          "message": "Wave 6 complete. Full end-to-end review: YOLO mode, consensus gates, all 4 skills, conductor logging. Final wave before release.",
+          "reviewItems": ["Conductor lifecycle", "zen consensus gates", "YOLO UI indicators", "agentic-ai-backlog skill", "agentic-ai-review skill", "agentic-ai-done skill", "self-evolve skill"],
+          "manualActions": ["Full manual E2E test of YOLO mode", "Test each skill independently"]
+        },
+        "qualityGates": ["code-review", "security-review", "build-verification"]
+      }
+    ]
+  },
+  "tasksById": {
+    "task-0.1": { "phase": "phase-0", "name": "Analyze home.go extraction boundaries", "wave": 1 },
+    "task-0.2": { "phase": "phase-0", "name": "Execute home.go decomposition", "wave": 1 },
+    "task-0.3": { "phase": "phase-0", "name": "Verify functional equivalence", "wave": 1 },
+    "task-1.1": { "phase": "phase-1", "name": "Define KanbanColumn type + Instance fields", "wave": 2 },
+    "task-1.2": { "phase": "phase-1", "name": "Create SQLite migrations", "wave": 2 },
+    "task-1.3": { "phase": "phase-1", "name": "Add CRUD methods + GroupKanbanConfig persistence", "wave": 2 },
+    "task-1.4": { "phase": "phase-1", "name": "Define Bubble Tea message types for kanban", "wave": 2 },
+    "task-1.5": { "phase": "phase-1", "name": "Implement sort order calculation + rebalancing", "wave": 2 },
+    "task-2.1": { "phase": "phase-2", "name": "Implement KanbanBoard component", "wave": 3 },
+    "task-2.2": { "phase": "phase-2", "name": "Implement KanbanCard component", "wave": 3 },
+    "task-2.3": { "phase": "phase-2", "name": "Implement KanbanSidebar component", "wave": 3 },
+    "task-2.4": { "phase": "phase-2", "name": "Integrate kanban into home.go routing", "wave": 3 },
+    "task-3.1": { "phase": "phase-3", "name": "Implement KanbanNav 2D cursor", "wave": 4 },
+    "task-3.2": { "phase": "phase-3", "name": "Add vertical scroll within columns", "wave": 4 },
+    "task-3.3": { "phase": "phase-3", "name": "Implement n (new session) and d (delete session) in board", "wave": 4 },
+    "task-3.4": { "phase": "phase-3", "name": "Implement m (move card) interaction flow", "wave": 4 },
+    "task-4.1": { "phase": "phase-4", "name": "Implement KanbanDetail panel", "wave": 4 },
+    "task-4.2": { "phase": "phase-4", "name": "Implement edit mode for detail panel", "wave": 4 },
+    "task-5.1": { "phase": "phase-5", "name": "Implement TransitionEngine interface", "wave": 5 },
+    "task-5.2": { "phase": "phase-5", "name": "Implement 3-tier config resolution", "wave": 5 },
+    "task-5.3": { "phase": "phase-5", "name": "Implement skill triggers + rollback", "wave": 5 },
+    "task-6.1": { "phase": "phase-6", "name": "Implement Conductor lifecycle", "wave": 6 },
+    "task-6.2": { "phase": "phase-6", "name": "Implement zen consensus gate protocol", "wave": 6 },
+    "task-6.3": { "phase": "phase-6", "name": "Implement YOLO UI indicators", "wave": 6 },
+    "task-7.1": { "phase": "phase-7", "name": "Create agentic-ai-backlog skill", "wave": 6 },
+    "task-7.2": { "phase": "phase-7", "name": "Create agentic-ai-review skill", "wave": 6 },
+    "task-7.3": { "phase": "phase-7", "name": "Create agentic-ai-done skill", "wave": 6 },
+    "task-7.4": { "phase": "phase-7", "name": "Create self-evolve skill", "wave": 6 }
+  },
+  "phases": [
+    {
+      "id": "phase-0",
+      "name": "Refactor",
+      "description": "Decompose home.go into kanban component files. Extract existing logic only — zero new features. Separate PR.",
+      "tasks": [
+        {
+          "id": "task-0.1",
+          "name": "Analyze home.go extraction boundaries",
+          "files": {
+            "create": [],
+            "modify": [],
+            "test": [],
+            "read": ["internal/ui/home.go"]
+          },
+          "steps": [
+            { "step": 1, "action": "Read all 9031 lines of home.go", "detail": "Catalog every function, type, and method" },
+            { "step": 2, "action": "Identify logical groupings", "detail": "Sidebar rendering, session list/grid, card rendering, navigation state, detail/preview logic, dialog management" },
+            { "step": 3, "action": "Map each group to target file", "detail": "kanban_board.go, kanban_card.go, kanban_sidebar.go, kanban_detail.go, kanban_nav.go" },
+            { "step": 4, "action": "Identify shared state and helpers", "detail": "Functions that must remain in home.go" },
+            { "step": 5, "action": "Document extraction plan", "detail": "Function-to-file mapping document" },
+            { "step": 6, "action": "Plan stub files", "detail": "kanban_transition.go and kanban_conductor.go — no existing code to extract" }
+          ],
+          "blockedBy": [],
+          "agentOrchestration": {
+            "model": "opus",
+            "modelRationale": "Deep analysis of 9031-line file requires strong reasoning about code boundaries and dependencies",
+            "delegateTo": ["architect"],
+            "mcpTools": { "required": [], "optional": [] },
+            "skills": [],
+            "permissionMode": "default",
+            "estimatedComplexity": "high",
+            "wave": 1,
+            "canParallelWith": [],
+            "blockedBy": []
+          },
+          "progressTracking": {
+            "totalSteps": 6, "completedSteps": 6, "percentage": 100, "status": "complete",
+            "activeForm": "Analyzing home.go extraction boundaries"
+          }
+        },
+        {
+          "id": "task-0.2",
+          "name": "Execute home.go decomposition",
+          "files": {
+            "create": ["internal/ui/kanban_board.go", "internal/ui/kanban_card.go", "internal/ui/kanban_sidebar.go", "internal/ui/kanban_detail.go", "internal/ui/kanban_nav.go", "internal/ui/kanban_transition.go", "internal/ui/kanban_conductor.go"],
+            "modify": ["internal/ui/home.go"],
+            "test": []
+          },
+          "steps": [
+            { "step": 1, "action": "Create kanban_sidebar.go", "detail": "Extract sidebar/group rendering functions" },
+            { "step": 2, "action": "Create kanban_board.go", "detail": "Extract board/grid layout functions" },
+            { "step": 3, "action": "Create kanban_card.go", "detail": "Extract card/session rendering functions" },
+            { "step": 4, "action": "Create kanban_nav.go", "detail": "Extract navigation state machine logic" },
+            { "step": 5, "action": "Create kanban_detail.go", "detail": "Extract preview/detail panel logic" },
+            { "step": 6, "action": "Create kanban_transition.go", "detail": "Empty file with package declaration + interface stubs" },
+            { "step": 7, "action": "Create kanban_conductor.go", "detail": "Empty file with package declaration + interface stubs" },
+            { "step": 8, "action": "Update home.go", "detail": "Fix imports and cross-references to use extracted functions" },
+            { "step": 9, "action": "Verify compilation", "detail": "Ensure all files compile together", "command": "go build ./..." }
+          ],
+          "blockedBy": ["task-0.1"],
+          "agentOrchestration": {
+            "model": "sonnet",
+            "modelRationale": "Standard refactoring with clear extraction plan from task 0.1",
+            "delegateTo": ["refactor-expert", "golang-pro"],
+            "mcpTools": { "required": [], "optional": [] },
+            "skills": [],
+            "permissionMode": "acceptEdits",
+            "estimatedComplexity": "high",
+            "wave": 1,
+            "canParallelWith": [],
+            "blockedBy": ["task-0.1"]
+          },
+          "progressTracking": {
+            "totalSteps": 9, "completedSteps": 9, "percentage": 100, "status": "complete",
+            "activeForm": "Decomposing home.go into kanban modules"
+          }
+        },
+        {
+          "id": "task-0.3",
+          "name": "Verify functional equivalence",
+          "files": { "create": [], "modify": [], "test": [] },
+          "steps": [
+            { "step": 1, "action": "Build binary", "detail": "Full binary build", "command": "go build -o build/agent-deck ./cmd/agent-deck/" },
+            { "step": 2, "action": "Run all tests", "detail": "All existing tests must pass", "command": "go test ./... -count=1 -short" },
+            { "step": 3, "action": "Run vet", "detail": "Static analysis", "command": "go vet ./..." },
+            { "step": 4, "action": "Verify line counts", "detail": "home.go should be significantly smaller", "command": "wc -l internal/ui/home.go internal/ui/kanban_*.go" },
+            { "step": 5, "action": "Fix any failures", "detail": "If tests or build fail, fix and re-verify" }
+          ],
+          "blockedBy": ["task-0.2"],
+          "agentOrchestration": {
+            "model": "haiku",
+            "modelRationale": "Simple verification commands, no reasoning needed",
+            "delegateTo": ["build-error-resolver"],
+            "mcpTools": { "required": [], "optional": [] },
+            "skills": [],
+            "permissionMode": "acceptEdits",
+            "estimatedComplexity": "low",
+            "wave": 1,
+            "canParallelWith": [],
+            "blockedBy": ["task-0.2"]
+          },
+          "progressTracking": {
+            "totalSteps": 5, "completedSteps": 5, "percentage": 100, "status": "complete",
+            "activeForm": "Verifying functional equivalence after decomposition"
+          }
+        }
+      ]
+    },
+    {
+      "id": "phase-1",
+      "name": "Data Layer",
+      "description": "SQLite migration, Instance fields, persistence, GroupKanbanConfig, Bubble Tea messages, sort order",
+      "tasks": [
+        {
+          "id": "task-1.1",
+          "name": "Define KanbanColumn type + Instance fields",
+          "files": { "create": [], "modify": ["internal/session/instance.go"], "test": ["internal/session/instance_test.go"] },
+          "steps": [
+            { "step": 1, "action": "Write tests for KanbanColumn type — RED", "detail": "TestKanbanColumnValid (6 values), TestKanbanColumnInvalid (empty/unknown/case), TestKanbanColumnString, TestParseKanbanColumn, TestKanbanColumnOrder (index 0-5), TestKanbanColumnNilSafe" },
+            { "step": 2, "action": "Define KanbanColumn type with 6 constants", "detail": "backlog, design, plan, implement, review, done. Add ParseKanbanColumn(s string) and (k KanbanColumn) Index() int" },
+            { "step": 3, "action": "Write tests for new Instance fields — RED", "detail": "TestInstanceKanbanFields, TestInstanceDefaultValues, TestInstanceAutomationMode, TestYOLOConfigJSON" },
+            { "step": 4, "action": "Add fields to Instance", "detail": "KanbanColumn (*KanbanColumn), KanbanSortOrder (int), KanbanLastMoved (*time.Time), Description (string), AcceptCriteria (string), AutomationMode, YOLOConfig (*YOLOConfig)" },
+            { "step": 5, "action": "Add AutomationMode type + YOLOConfig struct", "detail": "Interactive/YOLO modes. YOLOConfig: Mode, ConsensusModels, PassThreshold, PauseOnFail, MaxRetries, SkipColumns, ContinuationID" },
+            { "step": 6, "action": "Run tests — GREEN", "command": "go test ./internal/session/ -count=1 -short" },
+            { "step": 7, "action": "Refactor if needed — IMPROVE" }
+          ],
+          "blockedBy": [],
+          "agentOrchestration": {
+            "model": "sonnet",
+            "modelRationale": "Standard type definition and struct modification with TDD",
+            "delegateTo": ["tdd-guide", "golang-pro"],
+            "mcpTools": { "required": [], "optional": [] },
+            "skills": ["tdd-workflow"],
+            "permissionMode": "acceptEdits",
+            "estimatedComplexity": "medium",
+            "wave": 2,
+            "canParallelWith": ["task-1.2"],
+            "blockedBy": []
+          },
+          "progressTracking": {
+            "totalSteps": 7, "completedSteps": 7, "percentage": 100, "status": "complete",
+            "activeForm": "Defining KanbanColumn type and Instance fields"
+          }
+        },
+        {
+          "id": "task-1.2",
+          "name": "Create SQLite migrations",
+          "files": { "create": [], "modify": ["internal/statedb/statedb.go"], "test": ["internal/statedb/statedb_test.go"] },
+          "steps": [
+            { "step": 1, "action": "Write migration tests — RED", "detail": "TestMigrationFreshDB, TestMigrationExistingData (defaults: kanban_column=NULL, sort_order=0, etc.), TestMigrationIdempotent, TestGroupKanbanConfigsTable, TestColumnSkillMappingsTable" },
+            { "step": 2, "action": "Add ALTER TABLE for instances", "detail": "kanban_column TEXT, kanban_sort_order INTEGER DEFAULT 0, kanban_last_moved TIMESTAMP, description TEXT DEFAULT '', accept_criteria TEXT DEFAULT '', automation_mode TEXT DEFAULT 'interactive', yolo_config_json TEXT" },
+            { "step": 3, "action": "Create group_kanban_configs table", "detail": "group_path TEXT PK, kanban_enabled BOOLEAN DEFAULT 0, created_at, updated_at" },
+            { "step": 4, "action": "Create column_skill_mappings table", "detail": "id INTEGER PK AUTOINCREMENT, group_path TEXT NOT NULL, column_name TEXT NOT NULL, skill_name TEXT NOT NULL, auto_trigger BOOLEAN DEFAULT 0, trigger_on_enter BOOLEAN DEFAULT 1, FK group_path, UNIQUE(group_path, column_name)" },
+            { "step": 5, "action": "Run migration tests — GREEN", "command": "go test ./internal/statedb/ -count=1 -short -run Migration" },
+            { "step": 6, "action": "Test on fresh and existing database", "detail": "Verify ALTER TABLE works with existing data" }
+          ],
+          "blockedBy": [],
+          "agentOrchestration": {
+            "model": "sonnet",
+            "modelRationale": "Database migration work with SQL, needs user review",
+            "delegateTo": ["tdd-guide", "golang-pro"],
+            "mcpTools": { "required": [], "optional": [] },
+            "skills": ["tdd-workflow"],
+            "permissionMode": "default",
+            "estimatedComplexity": "medium",
+            "wave": 2,
+            "canParallelWith": ["task-1.1"],
+            "blockedBy": []
+          },
+          "progressTracking": {
+            "totalSteps": 6, "completedSteps": 6, "percentage": 100, "status": "complete",
+            "activeForm": "Creating SQLite migrations for kanban tables"
+          }
+        },
+        {
+          "id": "task-1.3",
+          "name": "Add CRUD methods + GroupKanbanConfig persistence",
+          "files": { "create": [], "modify": ["internal/session/storage.go"], "test": ["internal/session/storage_test.go"] },
+          "steps": [
+            { "step": 1, "action": "Write tests for kanban CRUD methods — RED", "detail": "TestUpdateKanbanColumn, TestUpdateKanbanColumn_InvalidColumn, TestUpdateSortOrder, TestUpdateDescription, TestUpdateAcceptCriteria, TestUpdateAutomationMode, TestUpdateYOLOConfig, TestGetSessionsByColumn" },
+            { "step": 2, "action": "Implement Update methods", "detail": "UpdateKanbanColumn, UpdateSortOrder, UpdateDescription, UpdateAcceptCriteria, UpdateAutomationMode, UpdateYOLOConfig" },
+            { "step": 3, "action": "Write tests for GroupKanbanConfig — RED", "detail": "TestSetGroupKanbanConfig, TestSetGroupKanbanConfig_Toggle, TestGetGroupKanbanConfig_NotFound, TestSetColumnSkillMapping, TestSetColumnSkillMapping_Override, TestGetColumnSkillMappings" },
+            { "step": 4, "action": "Implement GroupKanbanConfig methods", "detail": "GetGroupKanbanConfig, SetGroupKanbanConfig" },
+            { "step": 5, "action": "Implement ColumnSkillMapping methods", "detail": "GetColumnSkillMappings, SetColumnSkillMapping, GetSessionsByColumn" },
+            { "step": 6, "action": "Run all tests — GREEN", "command": "go test ./internal/session/ -count=1 -short" },
+            { "step": 7, "action": "Verify no regressions", "detail": "All existing storage tests still pass" }
+          ],
+          "blockedBy": ["task-1.1", "task-1.2"],
+          "agentOrchestration": {
+            "model": "sonnet",
+            "modelRationale": "Standard CRUD implementation building on types from 1.1 and schema from 1.2",
+            "delegateTo": ["tdd-guide", "golang-pro"],
+            "mcpTools": { "required": [], "optional": [] },
+            "skills": ["tdd-workflow"],
+            "permissionMode": "acceptEdits",
+            "estimatedComplexity": "medium",
+            "wave": 2,
+            "canParallelWith": ["task-1.4"],
+            "blockedBy": ["task-1.1", "task-1.2"]
+          },
+          "progressTracking": {
+            "totalSteps": 7, "completedSteps": 7, "percentage": 100, "status": "complete",
+            "activeForm": "Implementing CRUD methods for kanban data"
+          }
+        },
+        {
+          "id": "task-1.4",
+          "name": "Define Bubble Tea message types for kanban",
+          "files": { "create": ["internal/ui/kanban_messages.go"], "modify": [], "test": ["internal/ui/kanban_messages_test.go"] },
+          "steps": [
+            { "step": 1, "action": "Write tests verifying all message types implement tea.Msg — RED", "detail": "TestAllMessagesImplementMsg: each message type satisfies tea.Msg interface" },
+            { "step": 2, "action": "Define user input messages", "detail": "FocusChangedMsg, ColumnChangedMsg, CardChangedMsg, ColumnJumpMsg, DetailToggleMsg, AttachSessionMsg, EditModeMsg, MoveInitiatedMsg, MoveConfirmedMsg, YOLOModeToggleMsg, AutoTriggerToggleMsg, CreateSessionMsg, DeleteSessionMsg, KanbanToggleMsg" },
+            { "step": 3, "action": "Define system/response messages", "detail": "ShowConfirmDialogMsg, ExecuteTransitionMsg, SkillTriggeredMsg, SkillCompletedMsg, BoardRefreshMsg, RollbackMsg, ErrorDisplayMsg, ConductorStatusMsg" },
+            { "step": 4, "action": "Define supporting types", "detail": "FocusPanel enum (PanelSidebar, PanelBoard, PanelDetail), ErrorAction struct (Key rune, Label string, Msg tea.Msg)" },
+            { "step": 5, "action": "Run tests — GREEN" }
+          ],
+          "blockedBy": ["task-1.1"],
+          "agentOrchestration": {
+            "model": "sonnet",
+            "modelRationale": "Type definitions with clear spec from design doc",
+            "delegateTo": ["golang-pro"],
+            "mcpTools": { "required": [], "optional": [] },
+            "skills": [],
+            "permissionMode": "acceptEdits",
+            "estimatedComplexity": "medium",
+            "wave": 2,
+            "canParallelWith": ["task-1.3"],
+            "blockedBy": ["task-1.1"]
+          },
+          "progressTracking": {
+            "totalSteps": 5, "completedSteps": 5, "percentage": 100, "status": "complete",
+            "activeForm": "Defining Bubble Tea message types for kanban"
+          }
+        },
+        {
+          "id": "task-1.5",
+          "name": "Implement sort order calculation + rebalancing",
+          "files": { "create": ["internal/session/kanban_sort.go"], "modify": ["internal/session/storage.go"], "test": ["internal/session/kanban_sort_test.go"] },
+          "steps": [
+            { "step": 1, "action": "Write tests for sort order calculation — RED", "detail": "TestInitialSortOrder, TestAppendSortOrder, TestInsertBetween, TestInsertBetween_NarrowGap, TestRebalance, TestColumnMoveSortOrder, TestEmptyColumnSortOrder" },
+            { "step": 2, "action": "Implement CalculateInitialSortOrder", "detail": "CalculateInitialSortOrder(column KanbanColumn, existingCards []Instance) int" },
+            { "step": 3, "action": "Implement CalculateInsertBetween", "detail": "CalculateInsertBetween(above, below int) int" },
+            { "step": 4, "action": "Implement NeedsRebalance", "detail": "NeedsRebalance(sortOrders []int) bool — returns true if min gap < 10" },
+            { "step": 5, "action": "Implement Rebalance", "detail": "Rebalance(cards []Instance) map[string]int — redistributes sort orders evenly (immutable). Add BatchUpdateSortOrders to storage.go" },
+            { "step": 6, "action": "Implement CalculateMoveSortOrder", "detail": "CalculateMoveSortOrder(targetColumn KanbanColumn, existingCards []Instance) int" },
+            { "step": 7, "action": "Run tests — GREEN" }
+          ],
+          "blockedBy": ["task-1.1", "task-1.3"],
+          "agentOrchestration": {
+            "model": "sonnet",
+            "modelRationale": "Algorithm implementation with TDD",
+            "delegateTo": ["tdd-guide", "golang-pro"],
+            "mcpTools": { "required": [], "optional": [] },
+            "skills": ["tdd-workflow"],
+            "permissionMode": "acceptEdits",
+            "estimatedComplexity": "medium",
+            "wave": 2,
+            "canParallelWith": [],
+            "blockedBy": ["task-1.1", "task-1.3"]
+          },
+          "progressTracking": {
+            "totalSteps": 7, "completedSteps": 7, "percentage": 100, "status": "complete",
+            "activeForm": "Implementing sort order calculation and rebalancing"
+          }
+        }
+      ]
+    },
+    {
+      "id": "phase-2",
+      "name": "Board UI",
+      "description": "6-column kanban board layout, card rendering with status icons, sidebar group list, integration into home.go routing",
+      "tasks": [
+        {
+          "id": "task-2.1",
+          "name": "Implement KanbanBoard component",
+          "files": { "create": [], "modify": ["internal/ui/kanban_board.go"], "test": ["internal/ui/kanban_board_test.go"] },
+          "steps": [
+            { "step": 1, "action": "Write tests for 6-column layout rendering — RED", "detail": "TestBoardView_120Cols (6 cols at ~16 chars), TestBoardView_160Cols (6 cols at ~23 chars), TestBoardView_80Cols (hide sidebar, 3 columns with scroll indicators), TestBoardView_ColumnHeaders (abbreviated + count), TestBoardView_EmptyBoard (hint text), TestBoardView_CardsInColumns (sorted by sort_order). Golden files: testdata/board_120cols.golden, testdata/board_80cols.golden" },
+            { "step": 2, "action": "Implement KanbanBoard struct", "detail": "Init(), Update(), View(). Fields: columns [6][]Instance, width, height, selectedCol, scrollOffset" },
+            { "step": 3, "action": "Use lipgloss JoinHorizontal for column layout", "detail": "Use existing ensureExactWidth() for column alignment" },
+            { "step": 4, "action": "Handle terminal width distribution", "detail": "colWidth = (termWidth - sidebarWidth) / 6" },
+            { "step": 5, "action": "Render column headers with card counts", "detail": "Abbreviated names: BL, DE, PL, IM, RE, DO" },
+            { "step": 6, "action": "Run tests — GREEN" },
+            { "step": 7, "action": "Implement 80-col degradation", "detail": "Hide sidebar, show 3 columns (current + left/right neighbors), render scroll indicators" }
+          ],
+          "blockedBy": [],
+          "agentOrchestration": {
+            "model": "sonnet",
+            "modelRationale": "UI component implementation",
+            "delegateTo": ["tdd-guide", "golang-pro"],
+            "mcpTools": { "required": [], "optional": ["context7"] },
+            "skills": ["tdd-workflow"],
+            "permissionMode": "acceptEdits",
+            "estimatedComplexity": "medium",
+            "wave": 3,
+            "canParallelWith": ["task-2.2", "task-2.3"],
+            "blockedBy": []
+          },
+          "progressTracking": {
+            "totalSteps": 7, "completedSteps": 0, "percentage": 0, "status": "pending",
+            "activeForm": "Implementing KanbanBoard 6-column layout"
+          }
+        },
+        {
+          "id": "task-2.2",
+          "name": "Implement KanbanCard component",
+          "files": { "create": [], "modify": ["internal/ui/kanban_card.go"], "test": ["internal/ui/kanban_card_test.go"] },
+          "steps": [
+            { "step": 1, "action": "Write tests for card rendering — RED", "detail": "TestCardView_Compact (status icon + truncated title), TestCardView_StatusIcons (running/waiting/idle/error), TestCardView_Selected (highlight styling), TestCardView_Unselected, TestCardView_TitleTruncation (ellipsis), TestCardView_ShortTitle, TestCardView_YOLOIcon (robot prefix). Golden: testdata/card_compact.golden" },
+            { "step": 2, "action": "Implement KanbanCard struct", "detail": "View(). Fields: instance *Instance, selected bool, width int" },
+            { "step": 3, "action": "Use existing StatusIndicator() for status display" },
+            { "step": 4, "action": "Truncate title to column width with ellipsis", "detail": "runewidth.Truncate() or equivalent" },
+            { "step": 5, "action": "Show selected card highlight styling", "detail": "lipgloss.NewStyle().Background()/Border()" },
+            { "step": 6, "action": "Run tests — GREEN" }
+          ],
+          "blockedBy": [],
+          "agentOrchestration": {
+            "model": "sonnet",
+            "modelRationale": "UI component",
+            "delegateTo": ["tdd-guide", "golang-pro"],
+            "mcpTools": { "required": [], "optional": [] },
+            "skills": ["tdd-workflow"],
+            "permissionMode": "acceptEdits",
+            "estimatedComplexity": "medium",
+            "wave": 3,
+            "canParallelWith": ["task-2.1", "task-2.3"],
+            "blockedBy": []
+          },
+          "progressTracking": {
+            "totalSteps": 6, "completedSteps": 0, "percentage": 0, "status": "pending",
+            "activeForm": "Implementing KanbanCard rendering"
+          }
+        },
+        {
+          "id": "task-2.3",
+          "name": "Implement KanbanSidebar component",
+          "files": { "create": [], "modify": ["internal/ui/kanban_sidebar.go"], "test": ["internal/ui/kanban_sidebar_test.go"] },
+          "steps": [
+            { "step": 1, "action": "Write tests for group list rendering — RED", "detail": "TestSidebarView_Groups (list with names, selected highlighted), TestSidebarView_KanbanIndicator ([K] suffix), TestSidebarView_FixedWidth (20 columns), TestSidebarView_AllSessionsFirst, TestSidebarNav_JK (navigation with wrapping), TestSidebarNav_Focused (only responds when focused)" },
+            { "step": 2, "action": "Implement KanbanSidebar struct", "detail": "Init(), Update(), View(). Fields: groups []*Group, selectedIdx int, focused bool, height int" },
+            { "step": 3, "action": "Show group list with kanban toggle indicator", "detail": "[K] suffix for kanban-enabled groups" },
+            { "step": 4, "action": "Handle j/k navigation within sidebar", "detail": "Only when focused. Clamp selection to 0..len(groups)-1" },
+            { "step": 5, "action": "Fixed 20-column width", "detail": "lipgloss.Width(20) or ensureExactWidth" },
+            { "step": 6, "action": "Run tests — GREEN" }
+          ],
+          "blockedBy": [],
+          "agentOrchestration": {
+            "model": "sonnet",
+            "modelRationale": "UI component",
+            "delegateTo": ["tdd-guide", "golang-pro"],
+            "mcpTools": { "required": [], "optional": [] },
+            "skills": ["tdd-workflow"],
+            "permissionMode": "acceptEdits",
+            "estimatedComplexity": "medium",
+            "wave": 3,
+            "canParallelWith": ["task-2.1", "task-2.2"],
+            "blockedBy": []
+          },
+          "progressTracking": {
+            "totalSteps": 6, "completedSteps": 0, "percentage": 0, "status": "pending",
+            "activeForm": "Implementing KanbanSidebar group list"
+          }
+        },
+        {
+          "id": "task-2.4",
+          "name": "Integrate kanban into home.go routing",
+          "files": { "create": [], "modify": ["internal/ui/home.go"], "test": ["internal/ui/home_test.go"] },
+          "steps": [
+            { "step": 1, "action": "Write integration tests for kanban mode toggle — RED", "detail": "TestHomeKanbanRouting (kanban enabled -> board view), TestHomeKanbanRouting_AllSessions (always flat list), TestHomeKanbanToggle (K key toggles), TestHomeKanbanMessages (routing to sub-components), TestHomeKanbanDisabled (standard list/grid)" },
+            { "step": 2, "action": "Add kanban mode flag to home model state", "detail": "kanbanMode bool, kanbanBoard *KanbanBoard, kanbanSidebar *KanbanSidebar, kanbanDetail *KanbanDetail" },
+            { "step": 3, "action": "Route Update() messages to kanban components", "detail": "FocusChangedMsg, ColumnChangedMsg, CardChangedMsg to correct component when kanbanMode is true" },
+            { "step": 4, "action": "Wire kanban components into View()", "detail": "lipgloss.JoinHorizontal(sidebar | board)" },
+            { "step": 5, "action": "Implement K key handler on sidebar", "detail": "Toggle kanban via SetGroupKanbanConfig(), send KanbanToggleMsg" },
+            { "step": 6, "action": "Implement All Sessions exception", "detail": "Root/all-sessions group always renders flat list regardless of kanban state" },
+            { "step": 7, "action": "Run tests — GREEN" },
+            { "step": 8, "action": "Build binary and manually verify", "command": "go build -o build/agent-deck ./cmd/agent-deck/" }
+          ],
+          "blockedBy": ["task-2.1", "task-2.2", "task-2.3"],
+          "agentOrchestration": {
+            "model": "sonnet",
+            "modelRationale": "Integration work requiring code-review",
+            "delegateTo": ["tdd-guide", "golang-pro", "code-reviewer"],
+            "mcpTools": { "required": [], "optional": [] },
+            "skills": ["tdd-workflow"],
+            "permissionMode": "acceptEdits",
+            "estimatedComplexity": "high",
+            "wave": 3,
+            "canParallelWith": [],
+            "blockedBy": ["task-2.1", "task-2.2", "task-2.3"]
+          },
+          "progressTracking": {
+            "totalSteps": 8, "completedSteps": 0, "percentage": 0, "status": "pending",
+            "activeForm": "Integrating kanban board into home.go routing"
+          }
+        }
+      ]
+    },
+    {
+      "id": "phase-3",
+      "name": "Navigation",
+      "description": "2D cursor navigation (h/j/k/l), Tab focus cycling, column jump (1-6), vertical scroll, create/delete/move card interactions",
+      "tasks": [
+        {
+          "id": "task-3.1",
+          "name": "Implement KanbanNav 2D cursor",
+          "files": { "create": [], "modify": ["internal/ui/kanban_nav.go"], "test": ["internal/ui/kanban_nav_test.go"] },
+          "steps": [
+            { "step": 1, "action": "Write tests for all navigation transitions — RED", "detail": "TestNav_HLColumns (h/l with clamping), TestNav_JKCards (j/k with clamping), TestNav_Tab (cycle Sidebar->Board->Detail->Sidebar), TestNav_ColumnJump (1-6), TestNav_Enter (AttachSessionMsg), TestNav_Space (DetailToggleMsg), TestNav_EmptyColumn (skip empty), TestNav_ColumnChange_RowClamp, TestNav_FocusGuard (only when PanelBoard)" },
+            { "step": 2, "action": "Implement KanbanNav struct", "detail": "col int, row int, focus FocusPanel, detailOpen bool, columnCardCounts [6]int" },
+            { "step": 3, "action": "Implement h/l and j/k movement", "detail": "Boundary clamping. On column change, clamp row to min(currentRow, newColumnCardCount-1)" },
+            { "step": 4, "action": "Implement Tab focus cycling", "detail": "Sidebar -> Board -> Detail (if open) -> Sidebar" },
+            { "step": 5, "action": "Implement 1-6 column jump", "detail": "ColumnJumpMsg{Column: key - '1'}, reset row to 0" },
+            { "step": 6, "action": "Implement Enter and Space", "detail": "Enter -> AttachSessionMsg{SessionID}, Space -> DetailToggleMsg{}" },
+            { "step": 7, "action": "Handle empty columns", "detail": "h/l skips columns where columnCardCounts[col] == 0" },
+            { "step": 8, "action": "Run tests — GREEN" }
+          ],
+          "blockedBy": [],
+          "agentOrchestration": {
+            "model": "sonnet",
+            "modelRationale": "State machine implementation",
+            "delegateTo": ["tdd-guide", "golang-pro"],
+            "mcpTools": { "required": [], "optional": [] },
+            "skills": ["tdd-workflow"],
+            "permissionMode": "acceptEdits",
+            "estimatedComplexity": "high",
+            "wave": 4,
+            "canParallelWith": ["task-4.1"],
+            "blockedBy": []
+          },
+          "progressTracking": {
+            "totalSteps": 8, "completedSteps": 0, "percentage": 0, "status": "pending",
+            "activeForm": "Implementing KanbanNav 2D cursor navigation"
+          }
+        },
+        {
+          "id": "task-3.2",
+          "name": "Add vertical scroll within columns",
+          "files": { "create": [], "modify": ["internal/ui/kanban_nav.go", "internal/ui/kanban_board.go"], "test": [] },
+          "steps": [
+            { "step": 1, "action": "Write tests for scroll behavior — RED", "detail": "TestScroll_NoOverflow (no indicators), TestScroll_Overflow (shows below count), TestScroll_ScrollDown (shows above count), TestScroll_AutoFollow (j/k adjusts offset), TestScroll_BothIndicators, TestScroll_PerColumn (independent per column)" },
+            { "step": 2, "action": "Add scrollOffsets [6]int to KanbanNav", "detail": "Per-column scroll state" },
+            { "step": 3, "action": "Calculate visible card window", "detail": "visibleCards = (termHeight - headerHeight - footerHeight) / cardHeight" },
+            { "step": 4, "action": "Render scroll indicators", "detail": "Up arrow N above at top, down arrow N below at bottom" },
+            { "step": 5, "action": "Auto-scroll on selection change", "detail": "Keep selected row in viewport" },
+            { "step": 6, "action": "Run tests — GREEN" }
+          ],
+          "blockedBy": ["task-3.1"],
+          "agentOrchestration": {
+            "model": "sonnet",
+            "modelRationale": "Scroll behavior building on nav from 3.1",
+            "delegateTo": ["tdd-guide", "golang-pro"],
+            "mcpTools": { "required": [], "optional": [] },
+            "skills": ["tdd-workflow"],
+            "permissionMode": "acceptEdits",
+            "estimatedComplexity": "medium",
+            "wave": 4,
+            "canParallelWith": ["task-4.2"],
+            "blockedBy": ["task-3.1"]
+          },
+          "progressTracking": {
+            "totalSteps": 6, "completedSteps": 0, "percentage": 0, "status": "pending",
+            "activeForm": "Adding vertical scroll within columns"
+          }
+        },
+        {
+          "id": "task-3.3",
+          "name": "Implement n (new session) and d (delete session) in board",
+          "files": { "create": [], "modify": ["internal/ui/kanban_board.go", "internal/ui/home.go"], "test": ["internal/ui/kanban_board_test.go"] },
+          "steps": [
+            { "step": 1, "action": "Write tests for session creation/deletion — RED", "detail": "TestCreateSession_N (sends CreateSessionMsg), TestCreateSession_EmptyColumn, TestDeleteSession_D (ShowConfirmDialogMsg), TestDeleteSession_Confirm (DeleteSessionMsg), TestDeleteSession_Cancel (no change), TestDeleteSession_Empty (no-op)" },
+            { "step": 2, "action": "Implement n handler", "detail": "Send CreateSessionMsg with current column. Create session via storage, assign sort order, send BoardRefreshMsg" },
+            { "step": 3, "action": "Implement d handler", "detail": "Send ShowConfirmDialogMsg, on confirm -> delete session, send BoardRefreshMsg" },
+            { "step": 4, "action": "Run tests — GREEN" }
+          ],
+          "blockedBy": ["task-3.1"],
+          "agentOrchestration": {
+            "model": "sonnet",
+            "modelRationale": "Keyboard handler implementation",
+            "delegateTo": ["tdd-guide", "golang-pro"],
+            "mcpTools": { "required": [], "optional": [] },
+            "skills": ["tdd-workflow"],
+            "permissionMode": "acceptEdits",
+            "estimatedComplexity": "medium",
+            "wave": 4,
+            "canParallelWith": ["task-3.4"],
+            "blockedBy": ["task-3.1"]
+          },
+          "progressTracking": {
+            "totalSteps": 4, "completedSteps": 0, "percentage": 0, "status": "pending",
+            "activeForm": "Implementing create/delete session in board"
+          }
+        },
+        {
+          "id": "task-3.4",
+          "name": "Implement m (move card) interaction flow",
+          "files": { "create": [], "modify": ["internal/ui/kanban_board.go", "internal/ui/kanban_nav.go"], "test": ["internal/ui/kanban_board_test.go"] },
+          "steps": [
+            { "step": 1, "action": "Write tests for move interaction — RED", "detail": "TestMove_Initiate (m enters move mode), TestMove_SelectTarget (h/l in move mode), TestMove_Confirm (Enter sends MoveConfirmedMsg), TestMove_Cancel (Esc cancels), TestMove_SameColumn (no-op), TestMove_BackwardConfirm (ShowConfirmDialogMsg)" },
+            { "step": 2, "action": "Add moveMode and moveTargetCol to KanbanNav", "detail": "moveMode bool, moveTargetCol int" },
+            { "step": 3, "action": "Implement move mode", "detail": "m sets moveMode=true, h/l changes moveTargetCol, Enter confirms, Esc cancels" },
+            { "step": 4, "action": "Implement visual indicator", "detail": "Target column header highlighted in move mode" },
+            { "step": 5, "action": "Run tests — GREEN" }
+          ],
+          "blockedBy": ["task-3.1"],
+          "agentOrchestration": {
+            "model": "sonnet",
+            "modelRationale": "Multi-step interaction flow",
+            "delegateTo": ["tdd-guide", "golang-pro"],
+            "mcpTools": { "required": [], "optional": [] },
+            "skills": ["tdd-workflow"],
+            "permissionMode": "acceptEdits",
+            "estimatedComplexity": "medium",
+            "wave": 4,
+            "canParallelWith": ["task-3.3"],
+            "blockedBy": ["task-3.1"]
+          },
+          "progressTracking": {
+            "totalSteps": 5, "completedSteps": 0, "percentage": 0, "status": "pending",
+            "activeForm": "Implementing move card interaction flow"
+          }
+        }
+      ]
+    },
+    {
+      "id": "phase-4",
+      "name": "Detail Panel",
+      "description": "Editable detail panel with 14 fields, Space toggle, edit mode with Tab navigation, field persistence",
+      "tasks": [
+        {
+          "id": "task-4.1",
+          "name": "Implement KanbanDetail panel",
+          "files": { "create": [], "modify": ["internal/ui/kanban_detail.go"], "test": ["internal/ui/kanban_detail_test.go"] },
+          "steps": [
+            { "step": 1, "action": "Write tests for panel rendering — RED", "detail": "TestDetailView_AllFields (14 fields), TestDetailView_EditableMarkers, TestDetailView_Height (40% terminal), TestDetailView_SpaceToggle, TestDetailView_NilSession, TestDetailView_LongContent (wrapping)" },
+            { "step": 2, "action": "Implement KanbanDetail struct", "detail": "Init(), Update(), View(). Fields: instance *Instance, visible bool, editing bool, focusedField int, height int" },
+            { "step": 3, "action": "Render all 14 fields", "detail": "Editable: Title, Description, AC, KanbanColumn, Auto-trigger, YOLO. Read-only: Status, Tool, Worktree Path/Branch, Project Path, Model, MCP Servers, Last Prompt" },
+            { "step": 4, "action": "Handle Space toggle", "detail": "DetailToggleMsg flips visible state" },
+            { "step": 5, "action": "Panel height = 40% of terminal height", "detail": "Board takes remaining 60%" },
+            { "step": 6, "action": "Run tests — GREEN" }
+          ],
+          "blockedBy": [],
+          "agentOrchestration": {
+            "model": "sonnet",
+            "modelRationale": "UI component",
+            "delegateTo": ["tdd-guide", "golang-pro"],
+            "mcpTools": { "required": [], "optional": [] },
+            "skills": ["tdd-workflow"],
+            "permissionMode": "acceptEdits",
+            "estimatedComplexity": "medium",
+            "wave": 4,
+            "canParallelWith": ["task-3.1"],
+            "blockedBy": []
+          },
+          "progressTracking": {
+            "totalSteps": 6, "completedSteps": 0, "percentage": 0, "status": "pending",
+            "activeForm": "Implementing KanbanDetail panel"
+          }
+        },
+        {
+          "id": "task-4.2",
+          "name": "Implement edit mode for detail panel",
+          "files": { "create": [], "modify": ["internal/ui/kanban_detail.go"], "test": [] },
+          "steps": [
+            { "step": 1, "action": "Write tests for edit mode — RED", "detail": "TestEditMode_Enter (e sets editing=true), TestEditMode_Escape (Esc exits without saving), TestEditMode_TabAdvance, TestEditMode_SaveTitle, TestEditMode_SaveDescription, TestEditMode_YOLOToggle, TestEditMode_AutoTriggerToggle, TestEditMode_ColumnChange, TestEditMode_OnlyWhenOpen" },
+            { "step": 2, "action": "Add e key handler", "detail": "Only when detail visible and focus==PanelDetail. Sets editing=true" },
+            { "step": 3, "action": "Implement text input for title, textarea for description/AC", "detail": "bubbletea textinput and textarea components" },
+            { "step": 4, "action": "Implement Shift+Y and Shift+A toggles", "detail": "YOLOModeToggleMsg, AutoTriggerToggleMsg" },
+            { "step": 5, "action": "Esc exits edit mode (discard), Enter/Tab saves and advances" },
+            { "step": 6, "action": "Persist edits to SQLite", "detail": "UpdateDescription, UpdateAcceptCriteria, UpdateAutomationMode from Task 1.3 CRUD" },
+            { "step": 7, "action": "Run tests — GREEN" }
+          ],
+          "blockedBy": ["task-4.1"],
+          "agentOrchestration": {
+            "model": "sonnet",
+            "modelRationale": "Edit behavior building on detail panel from 4.1",
+            "delegateTo": ["tdd-guide", "golang-pro"],
+            "mcpTools": { "required": [], "optional": [] },
+            "skills": ["tdd-workflow"],
+            "permissionMode": "acceptEdits",
+            "estimatedComplexity": "medium",
+            "wave": 4,
+            "canParallelWith": ["task-3.2"],
+            "blockedBy": ["task-4.1"]
+          },
+          "progressTracking": {
+            "totalSteps": 7, "completedSteps": 0, "percentage": 0, "status": "pending",
+            "activeForm": "Implementing edit mode for detail panel"
+          }
+        }
+      ]
+    },
+    {
+      "id": "phase-5",
+      "name": "Transitions",
+      "description": "TransitionEngine for column moves, 3-tier config resolution (SQLite > YAML > defaults), skill triggers with rollback on failure",
+      "tasks": [
+        {
+          "id": "task-5.1",
+          "name": "Implement TransitionEngine interface",
+          "files": { "create": [], "modify": ["internal/ui/kanban_transition.go"], "test": ["internal/ui/kanban_transition_test.go"] },
+          "steps": [
+            { "step": 1, "action": "Write tests for transition validation — RED", "detail": "TestIsValidMove_Forward, TestIsValidMove_Backward (NeedsConfirm=true), TestIsValidMove_SameColumn (invalid), TestIsValidMove_NilColumn, TestRequestMove_Forward, TestRequestMove_Backward, TestRequestMove_ForceConfirm" },
+            { "step": 2, "action": "Define TransitionEngine interface", "detail": "RequestMove(req MoveRequest) MoveResult, ResolveSkill(groupPath string, column KanbanColumn) (SkillMapping, error), IsValidMove(from, to KanbanColumn) bool" },
+            { "step": 3, "action": "Define types", "detail": "MoveRequest, MoveResult, SkillMapping" },
+            { "step": 4, "action": "Define error types", "detail": "TransitionError, SkillFailedError, RollbackError" },
+            { "step": 5, "action": "Implement IsValidMove", "detail": "Forward always valid, backward valid but NeedsConfirm=true, same column invalid" },
+            { "step": 6, "action": "Implement basic RequestMove", "detail": "Without skill triggers: validate, update column, update sort order" },
+            { "step": 7, "action": "Run tests — GREEN" }
+          ],
+          "blockedBy": [],
+          "agentOrchestration": {
+            "model": "sonnet",
+            "modelRationale": "Interface + core logic",
+            "delegateTo": ["tdd-guide", "golang-pro"],
+            "mcpTools": { "required": [], "optional": [] },
+            "skills": ["tdd-workflow"],
+            "permissionMode": "acceptEdits",
+            "estimatedComplexity": "medium",
+            "wave": 5,
+            "canParallelWith": [],
+            "blockedBy": []
+          },
+          "progressTracking": {
+            "totalSteps": 7, "completedSteps": 0, "percentage": 0, "status": "pending",
+            "activeForm": "Implementing TransitionEngine interface"
+          }
+        },
+        {
+          "id": "task-5.2",
+          "name": "Implement 3-tier config resolution",
+          "files": { "create": [], "modify": ["internal/ui/kanban_transition.go"], "test": [] },
+          "steps": [
+            { "step": 1, "action": "Write tests for config resolution order — RED", "detail": "TestResolveSkill_DefaultsOnly, TestResolveSkill_YAMLOverride, TestResolveSkill_SQLiteOverride (SQLite > YAML > defaults), TestResolveSkill_NoYAMLFile, TestResolveSkill_InvalidYAML, TestResolveSkill_AutoTrigger" },
+            { "step": 2, "action": "Implement default skill-column mappings", "detail": "Hardcoded map: backlog->agentic-ai-backlog, design->agentic-ai-brainstorm, etc." },
+            { "step": 3, "action": "Define YAML schema and implement parsing", "detail": "~/.config/agent-deck/kanban.yaml with columns, skill, auto_trigger per column" },
+            { "step": 4, "action": "Implement ResolveSkillForColumn", "detail": "Check SQLite (GetColumnSkillMappings) -> check YAML -> return default" },
+            { "step": 5, "action": "Run tests — GREEN" }
+          ],
+          "blockedBy": ["task-5.1"],
+          "agentOrchestration": {
+            "model": "sonnet",
+            "modelRationale": "Config system building on transition engine from 5.1",
+            "delegateTo": ["tdd-guide", "golang-pro"],
+            "mcpTools": { "required": [], "optional": [] },
+            "skills": ["tdd-workflow"],
+            "permissionMode": "acceptEdits",
+            "estimatedComplexity": "medium",
+            "wave": 5,
+            "canParallelWith": [],
+            "blockedBy": ["task-5.1"]
+          },
+          "progressTracking": {
+            "totalSteps": 5, "completedSteps": 0, "percentage": 0, "status": "pending",
+            "activeForm": "Implementing 3-tier config resolution"
+          }
+        },
+        {
+          "id": "task-5.3",
+          "name": "Implement skill triggers + rollback",
+          "files": { "create": [], "modify": ["internal/ui/kanban_transition.go", "internal/ui/home.go"], "test": [] },
+          "steps": [
+            { "step": 1, "action": "Write tests for skill execution flow — RED", "detail": "TestSkillTrigger_Success, TestSkillTrigger_Failure (rollback), TestSkillTrigger_NoAutoTrigger, TestSkillTrigger_BackwardConfirm, TestSkillTrigger_BackwardCancel, TestSkillTrigger_ProcessingState, TestRollback_Success, TestRollback_Failure (RollbackError), TestErrorDisplay_Retry, TestErrorDisplay_ViewLogs, TestErrorDisplay_Ignore" },
+            { "step": 2, "action": "Implement async skill execution", "detail": "On ExecuteTransitionMsg, card moves immediately. If skill configured, launch in goroutine" },
+            { "step": 3, "action": "Launch skill in background via tmux", "detail": "tmux send-keys -t {sessionID} '/<skill-name>' Enter" },
+            { "step": 4, "action": "Send tea.Msg on completion", "detail": "SkillCompletedMsg{SessionID, Success, Error, Output}" },
+            { "step": 5, "action": "Implement rollback on failure", "detail": "UpdateKanbanColumn back to FromColumn, restore original sort order" },
+            { "step": 6, "action": "Add confirmation dialog for backward moves", "detail": "ShowConfirmDialogMsg with backward warning" },
+            { "step": 7, "action": "Show error in detail panel", "detail": "ErrorDisplayMsg with ErrorActions (retry, view logs, ignore)" },
+            { "step": 8, "action": "Handle skill needs user input", "detail": "Card shows waiting status, Enter to attach" },
+            { "step": 9, "action": "Run tests — GREEN" }
+          ],
+          "blockedBy": ["task-5.2"],
+          "agentOrchestration": {
+            "model": "sonnet",
+            "modelRationale": "Async skill execution with rollback, needs code-review",
+            "delegateTo": ["tdd-guide", "golang-pro", "code-reviewer"],
+            "mcpTools": { "required": [], "optional": [] },
+            "skills": ["tdd-workflow"],
+            "permissionMode": "acceptEdits",
+            "estimatedComplexity": "high",
+            "wave": 5,
+            "canParallelWith": [],
+            "blockedBy": ["task-5.2"]
+          },
+          "progressTracking": {
+            "totalSteps": 9, "completedSteps": 0, "percentage": 0, "status": "pending",
+            "activeForm": "Implementing skill triggers and rollback"
+          }
+        }
+      ]
+    },
+    {
+      "id": "phase-6",
+      "name": "Conductor",
+      "description": "YOLO autonomous mode with Conductor lifecycle, zen consensus gates for quality validation at each column transition",
+      "tasks": [
+        {
+          "id": "task-6.1",
+          "name": "Implement Conductor lifecycle",
+          "files": { "create": [], "modify": ["internal/ui/kanban_conductor.go"], "test": ["internal/ui/kanban_conductor_test.go"], "read": ["internal/session/conductor.go"] },
+          "steps": [
+            { "step": 1, "action": "Write tests for conductor state machine — RED", "detail": "TestConductor_Spawn, TestConductor_RunLoop, TestConductor_Terminate_Done, TestConductor_Terminate_Disabled, TestConductor_Terminate_MaxRetries, TestConductor_Resume, TestConductor_GateFail, TestConductor_SkipColumns, TestConductor_Crash, TestConductor_Logging" },
+            { "step": 2, "action": "Read existing conductor.go (1903 lines)", "detail": "Understand current patterns for goroutine lifecycle, message passing" },
+            { "step": 3, "action": "Implement Conductor struct", "detail": "sessionID, yoloConfig, currentColumn, retryCount, continuationID, running" },
+            { "step": 4, "action": "Implement spawn", "detail": "YOLOModeToggleMsg -> create Conductor in goroutine, bind to session" },
+            { "step": 5, "action": "Implement run loop", "detail": "For each column: resolve skill -> execute -> wait -> consensus gate -> if pass: advance -> if fail: retry or pause" },
+            { "step": 6, "action": "Implement terminate", "detail": "Done reached || YOLO disabled || retryCount >= MaxRetries" },
+            { "step": 7, "action": "Implement resume", "detail": "New conductor reads current column from storage, continues" },
+            { "step": 8, "action": "Implement logging", "detail": "Append gate decisions to .agent-deck/conductor-log.md" },
+            { "step": 9, "action": "Run tests — GREEN" }
+          ],
+          "blockedBy": [],
+          "agentOrchestration": {
+            "model": "opus",
+            "modelRationale": "Complex orchestration design requiring deep reasoning about goroutine lifecycle",
+            "delegateTo": ["tdd-guide", "golang-pro", "architect"],
+            "mcpTools": { "required": ["zen"], "optional": [] },
+            "skills": ["tdd-workflow"],
+            "permissionMode": "default",
+            "estimatedComplexity": "high",
+            "wave": 6,
+            "canParallelWith": [],
+            "blockedBy": []
+          },
+          "progressTracking": {
+            "totalSteps": 9, "completedSteps": 0, "percentage": 0, "status": "pending",
+            "activeForm": "Implementing Conductor lifecycle"
+          }
+        },
+        {
+          "id": "task-6.2",
+          "name": "Implement zen consensus gate protocol",
+          "files": { "create": [], "modify": ["internal/ui/kanban_conductor.go"], "test": [] },
+          "steps": [
+            { "step": 1, "action": "Write tests for gate configurations — RED", "detail": "TestGateConfig_BacklogToDesign, TestGateConfig_DesignToPlan, TestGateConfig_PlanToImplement, TestGateConfig_ImplementToReview, TestGateConfig_ReviewToDone (UNANIMOUS), TestConsensusCallBuilder, TestConsensusBlinded, TestPassFail_Unanimous, TestPassFail_Majority, TestPassFail_Fail, TestMixedEscalation, TestGateTimeout" },
+            { "step": 2, "action": "Define gate configs map", "detail": "var gateConfigs = map[[2]KanbanColumn]GateConfig{...} with models, thinking, threshold per transition" },
+            { "step": 3, "action": "Implement consensus call builder", "detail": "Creates zen consensus params. Step 1 step field is evaluation question. relevant_files for artifacts. Temperature=0.2" },
+            { "step": 4, "action": "Implement blinded consensus", "detail": "Step 1 proposal frozen, steps 2+ internal notes" },
+            { "step": 5, "action": "Implement pass/fail", "detail": "Parse model verdicts, apply threshold logic" },
+            { "step": 6, "action": "Implement escalation", "detail": "On mixed results, call thinkdeep with same continuation_id" },
+            { "step": 7, "action": "Implement large output handling", "detail": "If >50K chars, save to temp file, pass path (never inline)" },
+            { "step": 8, "action": "Reuse continuation_id across all gates", "detail": "Store in Conductor struct, pass to YOLOConfig" },
+            { "step": 9, "action": "Run tests — GREEN" }
+          ],
+          "blockedBy": ["task-6.1"],
+          "agentOrchestration": {
+            "model": "opus",
+            "modelRationale": "Complex MCP integration with zen consensus protocol",
+            "delegateTo": ["tdd-guide", "golang-pro"],
+            "mcpTools": { "required": ["zen"], "optional": [] },
+            "skills": ["tdd-workflow"],
+            "permissionMode": "default",
+            "estimatedComplexity": "high",
+            "wave": 6,
+            "canParallelWith": ["task-6.3", "task-7.1", "task-7.2", "task-7.3", "task-7.4"],
+            "blockedBy": ["task-6.1"]
+          },
+          "progressTracking": {
+            "totalSteps": 9, "completedSteps": 0, "percentage": 0, "status": "pending",
+            "activeForm": "Implementing zen consensus gate protocol"
+          }
+        },
+        {
+          "id": "task-6.3",
+          "name": "Implement YOLO UI indicators",
+          "files": { "create": [], "modify": ["internal/ui/kanban_card.go", "internal/ui/kanban_conductor.go"], "test": [] },
+          "steps": [
+            { "step": 1, "action": "Write tests for YOLO card indicators — RED", "detail": "TestYOLOCard_RobotIcon, TestYOLOCard_NoIcon, TestYOLOProgress_AllPending, TestYOLOProgress_MidWay, TestYOLOProgress_Complete, TestYOLOGateStatus_InProgress, TestYOLOGateStatus_Passed, TestYOLOGateStatus_Failed" },
+            { "step": 2, "action": "Modify KanbanCard.View() for YOLO", "detail": "If AutomationMode == yolo, prefix title with robot icon" },
+            { "step": 3, "action": "Add progress bar to detail panel", "detail": "Column progress with checkmarks (passed), gear (current), blank (pending)" },
+            { "step": 4, "action": "Add gate status line to detail panel", "detail": "Per-model status from ConductorStatusMsg" },
+            { "step": 5, "action": "Conductor logging already in Task 6.1 step 8" },
+            { "step": 6, "action": "Run tests — GREEN" }
+          ],
+          "blockedBy": ["task-6.1"],
+          "agentOrchestration": {
+            "model": "sonnet",
+            "modelRationale": "UI indicators",
+            "delegateTo": ["tdd-guide", "golang-pro"],
+            "mcpTools": { "required": [], "optional": [] },
+            "skills": ["tdd-workflow"],
+            "permissionMode": "acceptEdits",
+            "estimatedComplexity": "medium",
+            "wave": 6,
+            "canParallelWith": ["task-6.2", "task-7.1", "task-7.2", "task-7.3", "task-7.4"],
+            "blockedBy": ["task-6.1"]
+          },
+          "progressTracking": {
+            "totalSteps": 6, "completedSteps": 0, "percentage": 0, "status": "pending",
+            "activeForm": "Implementing YOLO UI indicators"
+          }
+        }
+      ]
+    },
+    {
+      "id": "phase-7",
+      "name": "Skills",
+      "description": "4 new Claude Code skills: agentic-ai-backlog, agentic-ai-review, agentic-ai-done, self-evolve",
+      "tasks": [
+        {
+          "id": "task-7.1",
+          "name": "Create agentic-ai-backlog skill",
+          "files": { "create": ["~/.claude/skills/agentic-ai-backlog/SKILL.md", "~/.claude/skills/agentic-ai-backlog/references/debt-detection-patterns.md", "~/.claude/skills/agentic-ai-backlog/references/security-checklist.md", "~/.claude/skills/agentic-ai-backlog/references/performance-metrics.md", "~/.claude/skills/agentic-ai-backlog/references/prioritization-matrix.md"], "modify": [], "test": [] },
+          "steps": [
+            { "step": 1, "action": "Create skill directory structure" },
+            { "step": 2, "action": "Write SKILL.md", "detail": "YAML frontmatter, workflow checklist, RICE prioritization" },
+            { "step": 3, "action": "Create debt-detection-patterns.md", "detail": "TODO/FIXME patterns, code smells, unused deps" },
+            { "step": 4, "action": "Create security-checklist.md", "detail": "OWASP top 10, dependency audit" },
+            { "step": 5, "action": "Create performance-metrics.md", "detail": "N+1 queries, missing indexes, bundle size" },
+            { "step": 6, "action": "Create prioritization-matrix.md", "detail": "RICE framework template" }
+          ],
+          "blockedBy": [],
+          "agentOrchestration": {
+            "model": "sonnet",
+            "modelRationale": "Skill creation with reference files",
+            "delegateTo": [],
+            "mcpTools": { "required": [], "optional": [] },
+            "skills": [],
+            "permissionMode": "acceptEdits",
+            "estimatedComplexity": "medium",
+            "wave": 6,
+            "canParallelWith": ["task-6.2", "task-6.3", "task-7.2", "task-7.3", "task-7.4"],
+            "blockedBy": []
+          },
+          "progressTracking": {
+            "totalSteps": 6, "completedSteps": 0, "percentage": 0, "status": "pending",
+            "activeForm": "Creating agentic-ai-backlog skill"
+          }
+        },
+        {
+          "id": "task-7.2",
+          "name": "Create agentic-ai-review skill",
+          "files": { "create": ["~/.claude/skills/agentic-ai-review/SKILL.md", "~/.claude/skills/agentic-ai-review/references/agent-team-guidelines.md", "~/.claude/skills/agentic-ai-review/references/chrome-review-guide.md", "~/.claude/skills/agentic-ai-review/references/ui-detection-rules.md", "~/.claude/skills/agentic-ai-review/references/e2e-test-requirements.md", "~/.claude/skills/agentic-ai-review/references/quality-gates.md"], "modify": [], "test": [] },
+          "steps": [
+            { "step": 1, "action": "Create skill directory structure" },
+            { "step": 2, "action": "Write SKILL.md", "detail": "Agent team architecture (coordinator + 4 sub-agents)" },
+            { "step": 3, "action": "Define wave execution", "detail": "Wave 1 (static-checks || chrome-visual), Wave 2 (e2e-tests || code-review)" },
+            { "step": 4, "action": "Create agent-team-guidelines.md", "detail": "Model selection, context isolation rules" },
+            { "step": 5, "action": "Create chrome-review-guide.md", "detail": "Screenshot commands, Lighthouse, console checks" },
+            { "step": 6, "action": "Create ui-detection-rules.md", "detail": "Visual regression, breakpoint testing" },
+            { "step": 7, "action": "Create e2e-test-requirements.md", "detail": "Playwright patterns, critical flows" },
+            { "step": 8, "action": "Create quality-gates.md", "detail": "BLOCK criteria, severity definitions" }
+          ],
+          "blockedBy": [],
+          "agentOrchestration": {
+            "model": "sonnet",
+            "modelRationale": "Complex agent team architecture for review skill",
+            "delegateTo": [],
+            "mcpTools": { "required": [], "optional": [] },
+            "skills": [],
+            "permissionMode": "acceptEdits",
+            "estimatedComplexity": "high",
+            "wave": 6,
+            "canParallelWith": ["task-6.2", "task-6.3", "task-7.1", "task-7.3", "task-7.4"],
+            "blockedBy": []
+          },
+          "progressTracking": {
+            "totalSteps": 8, "completedSteps": 0, "percentage": 0, "status": "pending",
+            "activeForm": "Creating agentic-ai-review skill"
+          }
+        },
+        {
+          "id": "task-7.3",
+          "name": "Create agentic-ai-done skill",
+          "files": { "create": ["~/.claude/skills/agentic-ai-done/SKILL.md", "~/.claude/skills/agentic-ai-done/references/merge-conflict-resolution.md", "~/.claude/skills/agentic-ai-done/references/semver-rules.md", "~/.claude/skills/agentic-ai-done/references/changelog-format.md", "~/.claude/skills/agentic-ai-done/references/merge-strategies.md"], "modify": [], "test": [] },
+          "steps": [
+            { "step": 1, "action": "Create skill directory structure" },
+            { "step": 2, "action": "Write SKILL.md", "detail": "Safety protocol (5 pre-merge checks), merge strategy auto-detection" },
+            { "step": 3, "action": "Create merge-conflict-resolution.md", "detail": "git merge-tree dry run, conflict patterns" },
+            { "step": 4, "action": "Create semver-rules.md", "detail": "Conventional commit parsing -> version bump" },
+            { "step": 5, "action": "Create changelog-format.md", "detail": "Keep a Changelog template" },
+            { "step": 6, "action": "Create merge-strategies.md", "detail": "PR merge vs direct merge decision tree" }
+          ],
+          "blockedBy": [],
+          "agentOrchestration": {
+            "model": "sonnet",
+            "modelRationale": "Safety protocol design",
+            "delegateTo": [],
+            "mcpTools": { "required": [], "optional": [] },
+            "skills": [],
+            "permissionMode": "acceptEdits",
+            "estimatedComplexity": "medium",
+            "wave": 6,
+            "canParallelWith": ["task-6.2", "task-6.3", "task-7.1", "task-7.2", "task-7.4"],
+            "blockedBy": []
+          },
+          "progressTracking": {
+            "totalSteps": 6, "completedSteps": 0, "percentage": 0, "status": "pending",
+            "activeForm": "Creating agentic-ai-done skill"
+          }
+        },
+        {
+          "id": "task-7.4",
+          "name": "Create self-evolve skill",
+          "files": { "create": ["~/.claude/skills/self-evolve/SKILL.md", "~/.claude/skills/self-evolve/references/pattern-recognition.md", "~/.claude/skills/self-evolve/references/learning-categories.md", "~/.claude/skills/self-evolve/references/anti-pattern-detection.md", "~/.claude/skills/self-evolve/references/suggestion-templates.md"], "modify": [], "test": [] },
+          "steps": [
+            { "step": 1, "action": "Create skill directory structure" },
+            { "step": 2, "action": "Write SKILL.md", "detail": "Storage structure, confidence scoring (HIGH/MEDIUM/LOW), cross-validation" },
+            { "step": 3, "action": "Create pattern-recognition.md", "detail": "Heuristics for repeated behaviors" },
+            { "step": 4, "action": "Create learning-categories.md", "detail": "codebase-patterns, user-behaviors, testing, learned" },
+            { "step": 5, "action": "Create anti-pattern-detection.md", "detail": "Contradiction detection, stale pattern pruning" },
+            { "step": 6, "action": "Create suggestion-templates.md", "detail": "User-facing suggestion formats" }
+          ],
+          "blockedBy": [],
+          "agentOrchestration": {
+            "model": "sonnet",
+            "modelRationale": "Learning system design",
+            "delegateTo": [],
+            "mcpTools": { "required": [], "optional": [] },
+            "skills": [],
+            "permissionMode": "acceptEdits",
+            "estimatedComplexity": "medium",
+            "wave": 6,
+            "canParallelWith": ["task-6.2", "task-6.3", "task-7.1", "task-7.2", "task-7.3"],
+            "blockedBy": []
+          },
+          "progressTracking": {
+            "totalSteps": 6, "completedSteps": 0, "percentage": 0, "status": "pending",
+            "activeForm": "Creating self-evolve skill"
+          }
+        }
+      ]
+    }
+  ]
+}

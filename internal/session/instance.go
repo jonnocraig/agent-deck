@@ -42,6 +42,114 @@ const (
 	StatusStarting Status = "starting" // Session is being created (tmux initializing)
 )
 
+// KanbanColumn represents a column in the kanban board workflow
+type KanbanColumn string
+
+const (
+	KanbanBacklog   KanbanColumn = "backlog"
+	KanbanDesign    KanbanColumn = "design"
+	KanbanPlan      KanbanColumn = "plan"
+	KanbanImplement KanbanColumn = "implement"
+	KanbanReview    KanbanColumn = "review"
+	KanbanDone      KanbanColumn = "done"
+)
+
+// ParseKanbanColumn converts a string to a KanbanColumn, returning an error for invalid values
+func ParseKanbanColumn(s string) (KanbanColumn, error) {
+	col := KanbanColumn(s)
+	if !col.IsValid() {
+		return "", fmt.Errorf("invalid kanban column: %q", s)
+	}
+	return col, nil
+}
+
+// IsValid returns true if the KanbanColumn is one of the defined constants
+func (k KanbanColumn) IsValid() bool {
+	switch k {
+	case KanbanBacklog, KanbanDesign, KanbanPlan, KanbanImplement, KanbanReview, KanbanDone:
+		return true
+	default:
+		return false
+	}
+}
+
+// String returns the lowercase string representation of the KanbanColumn
+func (k KanbanColumn) String() string {
+	return string(k)
+}
+
+// Index returns the order index of the column (0-5)
+func (k KanbanColumn) Index() int {
+	switch k {
+	case KanbanBacklog:
+		return 0
+	case KanbanDesign:
+		return 1
+	case KanbanPlan:
+		return 2
+	case KanbanImplement:
+		return 3
+	case KanbanReview:
+		return 4
+	case KanbanDone:
+		return 5
+	default:
+		return -1
+	}
+}
+
+// AutomationMode represents the automation level for a kanban task
+type AutomationMode string
+
+const (
+	AutomationInteractive AutomationMode = "interactive"
+	AutomationYOLO        AutomationMode = "yolo"
+)
+
+// ParseAutomationMode converts a string to an AutomationMode, defaulting to interactive for empty string
+func ParseAutomationMode(s string) (AutomationMode, error) {
+	if s == "" {
+		return AutomationInteractive, nil
+	}
+	mode := AutomationMode(s)
+	if !mode.IsValid() {
+		return "", fmt.Errorf("invalid automation mode: %q", s)
+	}
+	return mode, nil
+}
+
+// IsValid returns true if the AutomationMode is one of the defined constants
+func (m AutomationMode) IsValid() bool {
+	switch m {
+	case AutomationInteractive, AutomationYOLO:
+		return true
+	default:
+		return false
+	}
+}
+
+// YOLOConfig holds configuration for YOLO (autonomous) automation mode
+type YOLOConfig struct {
+	ConsensusModels []string `json:"consensus_models,omitempty"`
+	PassThreshold   float64  `json:"pass_threshold,omitempty"`
+	PauseOnFail     bool     `json:"pause_on_fail,omitempty"`
+	MaxRetries      int      `json:"max_retries,omitempty"`
+	SkipColumns     []string `json:"skip_columns,omitempty"`
+	ContinuationID  string   `json:"continuation_id,omitempty"`
+}
+
+// MarshalJSON implements json.Marshaler for YOLOConfig
+func (y *YOLOConfig) MarshalJSON() ([]byte, error) {
+	type Alias YOLOConfig
+	return json.Marshal((*Alias)(y))
+}
+
+// UnmarshalJSON implements json.Unmarshaler for YOLOConfig
+func (y *YOLOConfig) UnmarshalJSON(data []byte) error {
+	type Alias YOLOConfig
+	return json.Unmarshal(data, (*Alias)(y))
+}
+
 const wrapperPlaceholder = "{command}"
 
 const (
@@ -116,6 +224,15 @@ type Instance struct {
 	// ToolOptions stores tool-specific launch options (Claude, Codex, Gemini, etc.)
 	// JSON structure: {"tool": "claude", "options": {...}}
 	ToolOptionsJSON json.RawMessage `json:"tool_options,omitempty"`
+
+	// Kanban board support
+	KanbanColumn    *KanbanColumn  `json:"kanban_column,omitempty"`
+	KanbanSortOrder int            `json:"kanban_sort_order"`
+	KanbanLastMoved *time.Time     `json:"kanban_last_moved,omitempty"`
+	Description     string         `json:"description,omitempty"`
+	AcceptCriteria  string         `json:"accept_criteria,omitempty"`
+	AutomationMode  AutomationMode `json:"automation_mode,omitempty"`
+	YOLOConfig      *YOLOConfig    `json:"yolo_config,omitempty"`
 
 	tmuxSession *tmux.Session // Internal tmux session
 

@@ -81,6 +81,15 @@ type InstanceData struct {
 
 	// MCP tracking (persisted for sync status display)
 	LoadedMCPNames []string `json:"loaded_mcp_names,omitempty"`
+
+	// Kanban board support
+	KanbanColumn    *KanbanColumn  `json:"kanban_column,omitempty"`
+	KanbanSortOrder int            `json:"kanban_sort_order"`
+	KanbanLastMoved *time.Time     `json:"kanban_last_moved,omitempty"`
+	Description     string         `json:"description,omitempty"`
+	AcceptCriteria  string         `json:"accept_criteria,omitempty"`
+	AutomationMode  AutomationMode `json:"automation_mode,omitempty"`
+	YOLOConfig      *YOLOConfig    `json:"yolo_config,omitempty"`
 }
 
 // GroupData represents serializable group data
@@ -90,6 +99,23 @@ type GroupData struct {
 	Expanded    bool   `json:"expanded"`
 	Order       int    `json:"order"`
 	DefaultPath string `json:"default_path,omitempty"`
+}
+
+// GroupKanbanConfig represents kanban configuration for a group.
+type GroupKanbanConfig struct {
+	GroupPath     string
+	KanbanEnabled bool
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+}
+
+// ColumnSkillMapping represents a skill mapping for a kanban column.
+type ColumnSkillMapping struct {
+	GroupPath      string
+	ColumnName     KanbanColumn
+	SkillName      string
+	AutoTrigger    bool
+	TriggerOnEnter bool
 }
 
 // Storage handles persistence of session data via SQLite.
@@ -264,6 +290,33 @@ func (s *Storage) SaveWithGroups(instances []*Instance, groupTree *GroupTree) er
 			inst.ToolOptionsJSON,
 		)
 
+		// Convert kanban fields
+		var kanbanColStr *string
+		if inst.KanbanColumn != nil {
+			s := inst.KanbanColumn.String()
+			kanbanColStr = &s
+		}
+
+		var kanbanMovedUnix *int64
+		if inst.KanbanLastMoved != nil {
+			unix := inst.KanbanLastMoved.Unix()
+			kanbanMovedUnix = &unix
+		}
+
+		automationMode := string(inst.AutomationMode)
+		if automationMode == "" {
+			automationMode = string(AutomationInteractive)
+		}
+
+		var yoloConfigJSON *string
+		if inst.YOLOConfig != nil {
+			data, err := json.Marshal(inst.YOLOConfig)
+			if err == nil {
+				s := string(data)
+				yoloConfigJSON = &s
+			}
+		}
+
 		rows[i] = &statedb.InstanceRow{
 			ID:              inst.ID,
 			Title:           inst.Title,
@@ -282,6 +335,13 @@ func (s *Storage) SaveWithGroups(instances []*Instance, groupTree *GroupTree) er
 			WorktreeRepo:    inst.WorktreeRepoRoot,
 			WorktreeBranch:  inst.WorktreeBranch,
 			ToolData:        toolData,
+			KanbanColumn:    kanbanColStr,
+			KanbanSortOrder: inst.KanbanSortOrder,
+			KanbanLastMoved: kanbanMovedUnix,
+			Description:     inst.Description,
+			AcceptCriteria:  inst.AcceptCriteria,
+			AutomationMode:  automationMode,
+			YOLOConfigJSON:  yoloConfigJSON,
 		}
 	}
 
@@ -403,6 +463,29 @@ func (s *Storage) LoadLite() ([]*InstanceData, []*GroupData, error) {
 			latestPrompt, loadedMCPs,
 			toolOpts := statedb.UnmarshalToolData(r.ToolData)
 
+		// Convert kanban fields
+		var kanbanCol *KanbanColumn
+		if r.KanbanColumn != nil {
+			col := KanbanColumn(*r.KanbanColumn)
+			kanbanCol = &col
+		}
+
+		var kanbanMoved *time.Time
+		if r.KanbanLastMoved != nil {
+			t := time.Unix(*r.KanbanLastMoved, 0)
+			kanbanMoved = &t
+		}
+
+		automationMode, _ := ParseAutomationMode(r.AutomationMode)
+
+		var yoloConfig *YOLOConfig
+		if r.YOLOConfigJSON != nil && *r.YOLOConfigJSON != "" {
+			var cfg YOLOConfig
+			if err := json.Unmarshal([]byte(*r.YOLOConfigJSON), &cfg); err == nil {
+				yoloConfig = &cfg
+			}
+		}
+
 		instances[i] = &InstanceData{
 			ID:                 r.ID,
 			Title:              r.Title,
@@ -433,6 +516,13 @@ func (s *Storage) LoadLite() ([]*InstanceData, []*GroupData, error) {
 			LatestPrompt:       latestPrompt,
 			ToolOptionsJSON:    toolOpts,
 			LoadedMCPNames:     loadedMCPs,
+			KanbanColumn:       kanbanCol,
+			KanbanSortOrder:    r.KanbanSortOrder,
+			KanbanLastMoved:    kanbanMoved,
+			Description:        r.Description,
+			AcceptCriteria:     r.AcceptCriteria,
+			AutomationMode:     automationMode,
+			YOLOConfig:         yoloConfig,
 		}
 	}
 
@@ -485,6 +575,29 @@ func (s *Storage) LoadWithGroups() ([]*Instance, []*GroupData, error) {
 			latestPrompt, loadedMCPs,
 			toolOpts := statedb.UnmarshalToolData(r.ToolData)
 
+		// Convert kanban fields
+		var kanbanCol *KanbanColumn
+		if r.KanbanColumn != nil {
+			col := KanbanColumn(*r.KanbanColumn)
+			kanbanCol = &col
+		}
+
+		var kanbanMoved *time.Time
+		if r.KanbanLastMoved != nil {
+			t := time.Unix(*r.KanbanLastMoved, 0)
+			kanbanMoved = &t
+		}
+
+		automationMode, _ := ParseAutomationMode(r.AutomationMode)
+
+		var yoloConfig *YOLOConfig
+		if r.YOLOConfigJSON != nil && *r.YOLOConfigJSON != "" {
+			var cfg YOLOConfig
+			if err := json.Unmarshal([]byte(*r.YOLOConfigJSON), &cfg); err == nil {
+				yoloConfig = &cfg
+			}
+		}
+
 		data.Instances[i] = &InstanceData{
 			ID:                 r.ID,
 			Title:              r.Title,
@@ -515,6 +628,13 @@ func (s *Storage) LoadWithGroups() ([]*Instance, []*GroupData, error) {
 			LatestPrompt:       latestPrompt,
 			ToolOptionsJSON:    toolOpts,
 			LoadedMCPNames:     loadedMCPs,
+			KanbanColumn:       kanbanCol,
+			KanbanSortOrder:    r.KanbanSortOrder,
+			KanbanLastMoved:    kanbanMoved,
+			Description:        r.Description,
+			AcceptCriteria:     r.AcceptCriteria,
+			AutomationMode:     automationMode,
+			YOLOConfig:         yoloConfig,
 		}
 	}
 
@@ -672,6 +792,13 @@ func (s *Storage) convertToInstances(data *StorageData) ([]*Instance, []*GroupDa
 			ToolOptionsJSON:    instData.ToolOptionsJSON,
 			LatestPrompt:       instData.LatestPrompt,
 			LoadedMCPNames:     instData.LoadedMCPNames,
+			KanbanColumn:       instData.KanbanColumn,
+			KanbanSortOrder:    instData.KanbanSortOrder,
+			KanbanLastMoved:    instData.KanbanLastMoved,
+			Description:        instData.Description,
+			AcceptCriteria:     instData.AcceptCriteria,
+			AutomationMode:     instData.AutomationMode,
+			YOLOConfig:         instData.YOLOConfig,
 			tmuxSession:        tmuxSess,
 		}
 
@@ -703,4 +830,390 @@ func statusToString(s Status) string {
 	default:
 		return "waiting"
 	}
+}
+
+// UpdateKanbanColumn updates the kanban column for a session.
+// Pass nil to remove the session from the kanban board.
+func (s *Storage) UpdateKanbanColumn(sessionID string, column *KanbanColumn) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.db == nil {
+		return fmt.Errorf("storage database not initialized")
+	}
+
+	// Validate column if not nil
+	if column != nil && !column.IsValid() {
+		return fmt.Errorf("invalid kanban column: %q", *column)
+	}
+
+	var colStr any = nil
+	if column != nil {
+		colStr = column.String()
+	}
+
+	if err := s.db.UpdateInstanceField(sessionID, "kanban_column", colStr); err != nil {
+		return fmt.Errorf("failed to update kanban column: %w", err)
+	}
+
+	_ = s.db.Touch()
+	return nil
+}
+
+// UpdateKanbanSortOrder updates the sort order within a kanban column.
+func (s *Storage) UpdateKanbanSortOrder(sessionID string, sortOrder int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.db == nil {
+		return fmt.Errorf("storage database not initialized")
+	}
+
+	if err := s.db.UpdateInstanceField(sessionID, "kanban_sort_order", sortOrder); err != nil {
+		return fmt.Errorf("failed to update kanban sort order: %w", err)
+	}
+
+	_ = s.db.Touch()
+	return nil
+}
+
+// BatchUpdateSortOrders updates sort orders for multiple sessions in a single transaction.
+// This is used during rebalancing to avoid N individual DB writes.
+func (s *Storage) BatchUpdateSortOrders(updates map[string]int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.db == nil {
+		return fmt.Errorf("storage database not initialized")
+	}
+
+	// Use the statedb UpdateInstanceField for each, wrapped in implicit SQLite WAL transaction
+	for id, order := range updates {
+		if err := s.db.UpdateInstanceField(id, "kanban_sort_order", order); err != nil {
+			return fmt.Errorf("batch update sort order for %s: %w", id, err)
+		}
+	}
+
+	return s.db.Touch()
+}
+
+// UpdateDescription updates the description field for a session.
+func (s *Storage) UpdateDescription(sessionID string, description string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.db == nil {
+		return fmt.Errorf("storage database not initialized")
+	}
+
+	if err := s.db.UpdateInstanceField(sessionID, "description", description); err != nil {
+		return fmt.Errorf("failed to update description: %w", err)
+	}
+
+	_ = s.db.Touch()
+	return nil
+}
+
+// UpdateAcceptCriteria updates the acceptance criteria field for a session.
+func (s *Storage) UpdateAcceptCriteria(sessionID string, criteria string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.db == nil {
+		return fmt.Errorf("storage database not initialized")
+	}
+
+	if err := s.db.UpdateInstanceField(sessionID, "accept_criteria", criteria); err != nil {
+		return fmt.Errorf("failed to update accept criteria: %w", err)
+	}
+
+	_ = s.db.Touch()
+	return nil
+}
+
+// UpdateAutomationMode updates the automation mode for a session.
+func (s *Storage) UpdateAutomationMode(sessionID string, mode AutomationMode) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.db == nil {
+		return fmt.Errorf("storage database not initialized")
+	}
+
+	if !mode.IsValid() {
+		return fmt.Errorf("invalid automation mode: %q", mode)
+	}
+
+	if err := s.db.UpdateInstanceField(sessionID, "automation_mode", string(mode)); err != nil {
+		return fmt.Errorf("failed to update automation mode: %w", err)
+	}
+
+	_ = s.db.Touch()
+	return nil
+}
+
+// UpdateYOLOConfig updates the YOLO configuration for a session.
+// Pass nil to clear the YOLO config.
+func (s *Storage) UpdateYOLOConfig(sessionID string, config *YOLOConfig) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.db == nil {
+		return fmt.Errorf("storage database not initialized")
+	}
+
+	var configJSON any = nil
+	if config != nil {
+		data, err := json.Marshal(config)
+		if err != nil {
+			return fmt.Errorf("failed to marshal YOLO config: %w", err)
+		}
+		configJSON = string(data)
+	}
+
+	if err := s.db.UpdateInstanceField(sessionID, "yolo_config", configJSON); err != nil {
+		return fmt.Errorf("failed to update YOLO config: %w", err)
+	}
+
+	_ = s.db.Touch()
+	return nil
+}
+
+// GetSessionsByColumn returns all sessions in a specific kanban column,
+// ordered by KanbanSortOrder ascending.
+func (s *Storage) GetSessionsByColumn(column KanbanColumn) ([]*Instance, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.db == nil {
+		return nil, fmt.Errorf("storage database not initialized")
+	}
+
+	if !column.IsValid() {
+		return nil, fmt.Errorf("invalid kanban column: %q", column)
+	}
+
+	// Load all instances and filter
+	allRows, err := s.db.LoadInstances()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load instances: %w", err)
+	}
+
+	// Filter and convert to InstanceData
+	var filtered []*InstanceData
+	for _, r := range allRows {
+		if r.KanbanColumn != nil && *r.KanbanColumn == column.String() {
+			claudeSID, claudeAt,
+				geminiSID, geminiAt,
+				geminiYolo, geminiModel,
+				opencodeSID, opencodeAt,
+				codexSID, codexAt,
+				latestPrompt, loadedMCPs,
+				toolOpts := statedb.UnmarshalToolData(r.ToolData)
+
+			var kanbanCol *KanbanColumn
+			if r.KanbanColumn != nil {
+				col := KanbanColumn(*r.KanbanColumn)
+				kanbanCol = &col
+			}
+
+			var kanbanMoved *time.Time
+			if r.KanbanLastMoved != nil {
+				t := time.Unix(*r.KanbanLastMoved, 0)
+				kanbanMoved = &t
+			}
+
+			automationMode, _ := ParseAutomationMode(r.AutomationMode)
+
+			var yoloConfig *YOLOConfig
+			if r.YOLOConfigJSON != nil && *r.YOLOConfigJSON != "" {
+				var cfg YOLOConfig
+				if err := json.Unmarshal([]byte(*r.YOLOConfigJSON), &cfg); err == nil {
+					yoloConfig = &cfg
+				}
+			}
+
+			filtered = append(filtered, &InstanceData{
+				ID:                 r.ID,
+				Title:              r.Title,
+				ProjectPath:        r.ProjectPath,
+				GroupPath:          r.GroupPath,
+				Order:              r.Order,
+				ParentSessionID:    r.ParentSessionID,
+				Command:            r.Command,
+				Wrapper:            r.Wrapper,
+				Tool:               r.Tool,
+				Status:             Status(r.Status),
+				CreatedAt:          r.CreatedAt,
+				LastAccessedAt:     r.LastAccessed,
+				TmuxSession:        r.TmuxSession,
+				WorktreePath:       r.WorktreePath,
+				WorktreeRepoRoot:   r.WorktreeRepo,
+				WorktreeBranch:     r.WorktreeBranch,
+				ClaudeSessionID:    claudeSID,
+				ClaudeDetectedAt:   claudeAt,
+				GeminiSessionID:    geminiSID,
+				GeminiDetectedAt:   geminiAt,
+				GeminiYoloMode:     geminiYolo,
+				GeminiModel:        geminiModel,
+				OpenCodeSessionID:  opencodeSID,
+				OpenCodeDetectedAt: opencodeAt,
+				CodexSessionID:     codexSID,
+				CodexDetectedAt:    codexAt,
+				LatestPrompt:       latestPrompt,
+				ToolOptionsJSON:    toolOpts,
+				LoadedMCPNames:     loadedMCPs,
+				KanbanColumn:       kanbanCol,
+				KanbanSortOrder:    r.KanbanSortOrder,
+				KanbanLastMoved:    kanbanMoved,
+				Description:        r.Description,
+				AcceptCriteria:     r.AcceptCriteria,
+				AutomationMode:     automationMode,
+				YOLOConfig:         yoloConfig,
+			})
+		}
+	}
+
+	// Sort by KanbanSortOrder before conversion
+	// Note: We need to sort the filtered list manually because convertToInstances
+	// doesn't sort by KanbanSortOrder (it uses Order field for global ordering)
+	type sortableInstanceData struct {
+		data      *InstanceData
+		sortOrder int
+	}
+	sortable := make([]sortableInstanceData, len(filtered))
+	for i, d := range filtered {
+		sortable[i] = sortableInstanceData{data: d, sortOrder: d.KanbanSortOrder}
+	}
+
+	// Sort by KanbanSortOrder ascending
+	for i := 0; i < len(sortable)-1; i++ {
+		for j := i + 1; j < len(sortable); j++ {
+			if sortable[i].sortOrder > sortable[j].sortOrder {
+				sortable[i], sortable[j] = sortable[j], sortable[i]
+			}
+		}
+	}
+
+	// Extract sorted data
+	sorted := make([]*InstanceData, len(sortable))
+	for i, s := range sortable {
+		sorted[i] = s.data
+	}
+
+	// Convert to Instance objects (using convertToInstances)
+	data := &StorageData{
+		Instances: sorted,
+	}
+	instances, _, err := s.convertToInstances(data)
+	return instances, err
+}
+
+// GetGroupKanbanConfig retrieves the kanban configuration for a group.
+// Returns nil if the group has no kanban config.
+func (s *Storage) GetGroupKanbanConfig(groupPath string) (*GroupKanbanConfig, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.db == nil {
+		return nil, fmt.Errorf("storage database not initialized")
+	}
+
+	row, err := s.db.LoadGroupKanbanConfig(groupPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load group kanban config: %w", err)
+	}
+
+	if row == nil {
+		return nil, nil
+	}
+
+	return &GroupKanbanConfig{
+		GroupPath:     row.GroupPath,
+		KanbanEnabled: row.KanbanEnabled,
+		CreatedAt:     time.Unix(row.CreatedAt, 0),
+		UpdatedAt:     time.Unix(row.UpdatedAt, 0),
+	}, nil
+}
+
+// SetGroupKanbanConfig saves the kanban configuration for a group.
+func (s *Storage) SetGroupKanbanConfig(config *GroupKanbanConfig) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.db == nil {
+		return fmt.Errorf("storage database not initialized")
+	}
+
+	row := &statedb.GroupKanbanConfigRow{
+		GroupPath:     config.GroupPath,
+		KanbanEnabled: config.KanbanEnabled,
+		CreatedAt:     config.CreatedAt.Unix(),
+		UpdatedAt:     config.UpdatedAt.Unix(),
+	}
+
+	if err := s.db.SaveGroupKanbanConfig(row); err != nil {
+		return fmt.Errorf("failed to save group kanban config: %w", err)
+	}
+
+	_ = s.db.Touch()
+	return nil
+}
+
+// GetColumnSkillMappings retrieves all column skill mappings for a group.
+func (s *Storage) GetColumnSkillMappings(groupPath string) ([]*ColumnSkillMapping, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.db == nil {
+		return nil, fmt.Errorf("storage database not initialized")
+	}
+
+	rows, err := s.db.LoadColumnSkillMappings(groupPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load column skill mappings: %w", err)
+	}
+
+	mappings := make([]*ColumnSkillMapping, len(rows))
+	for i, r := range rows {
+		mappings[i] = &ColumnSkillMapping{
+			GroupPath:      r.GroupPath,
+			ColumnName:     KanbanColumn(r.ColumnName),
+			SkillName:      r.SkillName,
+			AutoTrigger:    r.AutoTrigger,
+			TriggerOnEnter: r.TriggerOnEnter,
+		}
+	}
+
+	return mappings, nil
+}
+
+// SetColumnSkillMapping saves a column skill mapping for a group.
+// If a mapping already exists for the same (group_path, column_name), it will be replaced.
+func (s *Storage) SetColumnSkillMapping(mapping *ColumnSkillMapping) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.db == nil {
+		return fmt.Errorf("storage database not initialized")
+	}
+
+	if !mapping.ColumnName.IsValid() {
+		return fmt.Errorf("invalid kanban column: %q", mapping.ColumnName)
+	}
+
+	row := &statedb.ColumnSkillMappingRow{
+		GroupPath:      mapping.GroupPath,
+		ColumnName:     mapping.ColumnName.String(),
+		SkillName:      mapping.SkillName,
+		AutoTrigger:    mapping.AutoTrigger,
+		TriggerOnEnter: mapping.TriggerOnEnter,
+	}
+
+	if err := s.db.SaveColumnSkillMapping(row); err != nil {
+		return fmt.Errorf("failed to save column skill mapping: %w", err)
+	}
+
+	_ = s.db.Touch()
+	return nil
 }

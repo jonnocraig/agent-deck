@@ -1014,3 +1014,283 @@ func TestRestartSessionCmdSessionMissingReturnsError(t *testing.T) {
 		t.Fatalf("unexpected error: %v", restarted.err)
 	}
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Kanban Integration Tests
+// ═══════════════════════════════════════════════════════════════════════════════
+
+func TestHomeKanbanToggle(t *testing.T) {
+	home := NewHome()
+	home.width = 120
+	home.height = 40
+	home.initialLoading = false
+
+	// Initially not in kanban mode
+	if home.kanbanMode {
+		t.Error("should not start in kanban mode")
+	}
+
+	// Press ctrl+k to enter kanban mode
+	msg := tea.KeyMsg{Type: tea.KeyCtrlK}
+	model, _ := home.Update(msg)
+	h := model.(*Home)
+	if !h.kanbanMode {
+		t.Error("ctrl+k should enable kanban mode")
+	}
+	if h.kanbanFocus != PanelBoard {
+		t.Errorf("focus should be PanelBoard, got %d", h.kanbanFocus)
+	}
+
+	// Press Esc to exit kanban mode
+	escMsg := tea.KeyMsg{Type: tea.KeyEscape}
+	model, _ = h.Update(escMsg)
+	h = model.(*Home)
+	if h.kanbanMode {
+		t.Error("Esc should disable kanban mode")
+	}
+}
+
+func TestHomeKanbanRouting(t *testing.T) {
+	home := NewHome()
+	home.width = 120
+	home.height = 40
+	home.initialLoading = false
+	home.kanbanMode = true
+	home.kanbanFocus = PanelBoard
+
+	// Rebuild sidebar for rendering
+	home.rebuildKanbanSidebar()
+
+	// View should render without panicking
+	view := home.View()
+	if view == "" {
+		t.Error("kanban view should not be empty")
+	}
+}
+
+func TestHomeKanbanRouting_AllSessions(t *testing.T) {
+	home := NewHome()
+	home.width = 120
+	home.height = 40
+	home.initialLoading = false
+	home.kanbanMode = true
+	home.kanbanFocus = PanelBoard
+	home.rebuildKanbanSidebar()
+
+	// First sidebar item should be "All Sessions"
+	if len(home.kanbanSidebarState.Groups) == 0 {
+		t.Fatal("sidebar should have at least All Sessions")
+	}
+	if !home.kanbanSidebarState.Groups[0].IsAllSessions {
+		t.Error("first sidebar entry should be All Sessions")
+	}
+	if home.kanbanSidebarState.Groups[0].Name != "All Sessions" {
+		t.Errorf("first entry name = %q, want 'All Sessions'", home.kanbanSidebarState.Groups[0].Name)
+	}
+}
+
+func TestHomeKanbanDisabled(t *testing.T) {
+	home := NewHome()
+	home.width = 120
+	home.height = 40
+	home.initialLoading = false
+	home.kanbanMode = false
+
+	// View should render the standard list, not the kanban board
+	view := home.View()
+	if view == "" {
+		t.Error("view should not be empty")
+	}
+	// Standard view has "SESSIONS" panel title (not kanban column headers)
+	// This is a smoke test — the exact content depends on having instances
+}
+
+func TestHomeKanbanTabFocus(t *testing.T) {
+	home := NewHome()
+	home.width = 120
+	home.height = 40
+	home.initialLoading = false
+	home.kanbanMode = true
+	home.kanbanFocus = PanelBoard
+	home.rebuildKanbanSidebar()
+
+	// Press Tab to switch focus to sidebar
+	tabMsg := tea.KeyMsg{Type: tea.KeyTab}
+	model, _ := home.Update(tabMsg)
+	h := model.(*Home)
+	if h.kanbanFocus != PanelSidebar {
+		t.Errorf("Tab should switch to PanelSidebar, got %d", h.kanbanFocus)
+	}
+
+	// Press Tab again to switch back to board
+	model, _ = h.Update(tabMsg)
+	h = model.(*Home)
+	if h.kanbanFocus != PanelBoard {
+		t.Errorf("Tab should switch back to PanelBoard, got %d", h.kanbanFocus)
+	}
+}
+
+func TestHomeKanbanColumnJump(t *testing.T) {
+	home := NewHome()
+	home.width = 120
+	home.height = 40
+	home.initialLoading = false
+	home.kanbanMode = true
+	home.kanbanFocus = PanelBoard
+	home.rebuildKanbanSidebar()
+
+	// Press '3' to jump to Plan column (index 2)
+	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}}
+	model, _ := home.Update(msg)
+	h := model.(*Home)
+	if h.kanbanSelectedCol != 2 {
+		t.Errorf("pressing 3 should select column 2 (Plan), got %d", h.kanbanSelectedCol)
+	}
+
+	// Press '6' to jump to Done column (index 5)
+	msg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'6'}}
+	model, _ = h.Update(msg)
+	h = model.(*Home)
+	if h.kanbanSelectedCol != 5 {
+		t.Errorf("pressing 6 should select column 5 (Done), got %d", h.kanbanSelectedCol)
+	}
+}
+
+func TestHomeKanbanBoardNavigation(t *testing.T) {
+	home := NewHome()
+	home.width = 120
+	home.height = 40
+	home.initialLoading = false
+	home.kanbanMode = true
+	home.kanbanFocus = PanelBoard
+	home.kanbanSelectedCol = 0
+	home.rebuildKanbanSidebar()
+
+	// Press 'l' to move right
+	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}}
+	model, _ := home.Update(msg)
+	h := model.(*Home)
+	if h.kanbanSelectedCol != 1 {
+		t.Errorf("l should move to col 1, got %d", h.kanbanSelectedCol)
+	}
+
+	// Press 'h' to move left
+	msg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}}
+	model, _ = h.Update(msg)
+	h = model.(*Home)
+	if h.kanbanSelectedCol != 0 {
+		t.Errorf("h should move to col 0, got %d", h.kanbanSelectedCol)
+	}
+
+	// Press 'h' at leftmost — should clamp to 0
+	model, _ = h.Update(msg)
+	h = model.(*Home)
+	if h.kanbanSelectedCol != 0 {
+		t.Errorf("h at col 0 should stay 0, got %d", h.kanbanSelectedCol)
+	}
+}
+
+func TestKanbanKey_N_CreatesSession(t *testing.T) {
+	home := NewHome()
+	home.width = 120
+	home.height = 40
+	home.initialLoading = false
+	home.kanbanMode = true
+	home.kanbanFocus = PanelBoard
+	home.kanbanSelectedCol = 1 // Design column
+	home.rebuildKanbanSidebar()
+
+	// Press 'n' to create a new session
+	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}}
+	_, cmd := home.Update(msg)
+
+	// Should return a command (session creation is async)
+	if cmd == nil {
+		t.Error("pressing n in kanban mode should trigger session creation")
+	}
+}
+
+func TestKanbanKey_N_NotBoard(t *testing.T) {
+	home := NewHome()
+	home.width = 120
+	home.height = 40
+	home.initialLoading = false
+	home.kanbanMode = true
+	home.kanbanFocus = PanelSidebar // Focus on sidebar, not board
+	home.rebuildKanbanSidebar()
+
+	initialInstCount := len(home.instances)
+
+	// Press 'n' while focus is on sidebar
+	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}}
+	model, cmd := home.Update(msg)
+	h := model.(*Home)
+
+	// Should not create a session (n is only active when focus is on board)
+	if cmd != nil {
+		t.Error("pressing n when focus != PanelBoard should not trigger session creation")
+	}
+	if len(h.instances) != initialInstCount {
+		t.Error("session count should not change when n pressed outside board focus")
+	}
+}
+
+func TestKanbanKey_D_DeletesSession(t *testing.T) {
+	home := NewHome()
+	home.width = 120
+	home.height = 40
+	home.initialLoading = false
+	home.kanbanMode = true
+	home.kanbanFocus = PanelBoard
+	home.kanbanSelectedCol = 0
+	home.kanbanSelectedRow = 0
+
+	// Create a session in Backlog column
+	col := session.KanbanBacklog
+	inst := session.NewInstance("test-session", "/tmp/project")
+	inst.KanbanColumn = &col
+	home.instancesMu.Lock()
+	home.instances = []*session.Instance{inst}
+	home.instanceByID[inst.ID] = inst
+	home.instancesMu.Unlock()
+	home.groupTree = session.NewGroupTree(home.instances)
+	home.rebuildKanbanSidebar()
+
+	// Press 'd' to delete the session
+	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}}
+	model, _ := home.Update(msg)
+	h := model.(*Home)
+
+	// Should show confirmation dialog
+	if !h.confirmDialog.IsVisible() {
+		t.Error("pressing d should show confirmation dialog")
+	}
+	if h.confirmDialog.GetConfirmType() != ConfirmDeleteSession {
+		t.Errorf("confirm type = %v, want ConfirmDeleteSession", h.confirmDialog.GetConfirmType())
+	}
+	if h.confirmDialog.GetTargetID() != inst.ID {
+		t.Errorf("target ID = %s, want %s", h.confirmDialog.GetTargetID(), inst.ID)
+	}
+}
+
+func TestKanbanKey_D_EmptyColumn(t *testing.T) {
+	home := NewHome()
+	home.width = 120
+	home.height = 40
+	home.initialLoading = false
+	home.kanbanMode = true
+	home.kanbanFocus = PanelBoard
+	home.kanbanSelectedCol = 0 // Empty Backlog column
+	home.kanbanSelectedRow = 0
+	home.rebuildKanbanSidebar()
+
+	// No sessions in kanban, press 'd'
+	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}}
+	model, _ := home.Update(msg)
+	h := model.(*Home)
+
+	// Should not show confirmation dialog (no card to delete)
+	if h.confirmDialog.IsVisible() {
+		t.Error("pressing d in empty column should not show confirmation dialog")
+	}
+}
