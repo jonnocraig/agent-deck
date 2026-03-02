@@ -298,7 +298,7 @@ var columnAbbreviation = map[session.KanbanColumn]string{
 //   - (dim) for pending columns
 //
 // Standalone function for testability.
-func renderYOLOProgress(currentColumn session.KanbanColumn, width int) string {
+func renderYOLOProgress(currentColumn session.KanbanColumn) string {
 	currentIdx := currentColumn.Index()
 
 	greenStyle := lipgloss.NewStyle().Foreground(ColorGreen).Bold(true)
@@ -342,7 +342,7 @@ func abbreviateModelName(name string) string {
 //
 // Returns empty string if gateStatus is nil or empty.
 // Standalone function for testability.
-func renderGateStatus(gateStatus map[string]string, width int) string {
+func renderGateStatus(gateStatus map[string]string) string {
 	if len(gateStatus) == 0 {
 		return ""
 	}
@@ -425,8 +425,13 @@ func kanbanStatusIcon(status session.Status) (icon string, style lipgloss.Style)
 	}
 }
 
-// renderKanbanCard renders a compact single-line kanban card.
-// Format: [yolo_icon] [status_icon] [title]
+// renderKanbanCard renders a bordered kanban card with 3-line height.
+// Format (3 lines with border):
+//   ╭──────────────╮
+//   │ ● title  cl │
+//   ╰──────────────╯
+//
+// Content line: [selection_icon][status_icon] [title] [tool_badge]
 // - width: total card width in characters
 // - selected: whether this card is currently selected
 // Returns empty string if inst is nil.
@@ -437,13 +442,16 @@ func renderKanbanCard(inst *session.Instance, width int, selected bool) string {
 
 	// Get status icon and style
 	instStatus := inst.GetStatusThreadSafe()
+	instTool := inst.GetToolThreadSafe()
 	icon, iconStyle := kanbanStatusIcon(instStatus)
 
 	// Title style based on status and selection
 	var titleStyle lipgloss.Style
+	var toolStyle lipgloss.Style
 	if selected {
 		titleStyle = SessionTitleSelStyle
 		iconStyle = SessionStatusSelStyle
+		toolStyle = SessionStatusSelStyle
 	} else {
 		switch instStatus {
 		case session.StatusRunning, session.StatusWaiting:
@@ -453,19 +461,64 @@ func renderKanbanCard(inst *session.Instance, width int, selected bool) string {
 		default:
 			titleStyle = SessionTitleDefault
 		}
+		toolStyle = GetToolStyle(instTool)
+	}
+
+	// Tool badge abbreviation (2 letters)
+	// claude -> cl, gemini -> ge, codex -> cx, aider -> ai, cursor -> cu, shell -> sh
+	toolBadge := ""
+	switch instTool {
+	case "claude":
+		toolBadge = "cl"
+	case "gemini":
+		toolBadge = "ge"
+	case "codex":
+		toolBadge = "cx"
+	case "aider":
+		toolBadge = "ai"
+	case "cursor":
+		toolBadge = "cu"
+	case "shell":
+		toolBadge = "sh"
+	default:
+		// Truncate to first 2 chars for unknown tools
+		if len(instTool) >= 2 {
+			toolBadge = instTool[:2]
+		} else {
+			toolBadge = instTool
+		}
+	}
+
+	// Selection icon (for selected cards)
+	selectionIcon := ""
+	if selected {
+		selectionIcon = "▶"
+	}
+
+	// YOLO icon for autonomous sessions
+	yoloIcon := ""
+	if inst.AutomationMode == session.AutomationYOLO {
+		yoloIcon = "🤖"
 	}
 
 	// Calculate available width for title
-	// Format: "[icon] [title]" = 2 chars for icon+space, 2 for padding
-	// If YOLO mode: "🤖 [icon] [title]" = additional 3 chars for robot+space
-	availWidth := width - 4 // base: icon + space + padding
-	yoloPrefix := ""
-	if inst.AutomationMode == session.AutomationYOLO {
-		yoloPrefix = "🤖 "
-		availWidth -= 3
+	// Border takes 2 chars (left/right), padding takes 2 chars (left/right)
+	// Content format: "[sel][yolo][icon] [title] [tool]"
+	// Components: selection(1 or 0) + yolo(2 or 0) + icon(1) + space(1) + title(?) + space(1) + tool(2)
+	borderAndPadding := 4 // 2 for border, 2 for padding
+	selWidth := 0
+	if selected {
+		selWidth = 1
 	}
+	yoloWidth := 0
+	if yoloIcon != "" {
+		yoloWidth = 2 // emoji takes 2 visual chars
+	}
+	iconWidth := 1
+	toolWidth := len(toolBadge)
+	spaces := 2 // one before title, one before tool
 
-	// Ensure minimum width
+	availWidth := width - borderAndPadding - selWidth - yoloWidth - iconWidth - spaces - toolWidth
 	if availWidth < 3 {
 		availWidth = 3
 	}
@@ -474,19 +527,43 @@ func renderKanbanCard(inst *session.Instance, width int, selected bool) string {
 	title := truncateTitle(inst.Title, availWidth)
 
 	// Render components
+	styledSel := ""
+	if selectionIcon != "" {
+		styledSel = iconStyle.Render(selectionIcon)
+	}
+	styledYolo := ""
+	if yoloIcon != "" {
+		if selected {
+			styledYolo = iconStyle.Render(yoloIcon)
+		} else {
+			styledYolo = lipgloss.NewStyle().Foreground(ColorYellow).Render(yoloIcon)
+		}
+	}
 	styledIcon := iconStyle.Render(icon)
 	styledTitle := titleStyle.Render(title)
+	styledTool := toolStyle.Render(toolBadge)
 
-	// Build card
-	card := fmt.Sprintf("%s%s %s", yoloPrefix, styledIcon, styledTitle)
+	// Build content line: [sel][yolo][icon] [title] [tool]
+	content := fmt.Sprintf("%s%s%s %s %s", styledSel, styledYolo, styledIcon, styledTitle, styledTool)
 
-	// Add background for selected cards
+	// Create bordered card with RoundedBorder
+	var cardStyle lipgloss.Style
 	if selected {
-		cardStyle := lipgloss.NewStyle().
+		// Selected: accent color border + background highlight
+		cardStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(ColorAccent).
 			Background(ColorSurface).
+			Width(width - 2). // -2 for border chars
 			Padding(0, 1)
-		return cardStyle.Render(card)
+	} else {
+		// Unselected: subtle border
+		cardStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(ColorBorder).
+			Width(width - 2). // -2 for border chars
+			Padding(0, 1)
 	}
 
-	return card
+	return cardStyle.Render(content)
 }

@@ -2,31 +2,23 @@
 
 ## In Progress
 
-- [ ] **Manual Testing of Kanban Mode** — ctrl+k to enter kanban mode, need a group with kanban enabled
-  - Feature branch merged into main worktree locally (merge commit `1dc8cae`)
-  - Binary rebuilt at `/Users/jon_ec/code/research/agent-deck/build/agent-deck`
-  - Symlink at `/opt/homebrew/bin/agent-deck` points to that binary
-  - User could not see kanban board — likely because no group has `kanban_enabled=1` in SQLite
-  - Need to enable kanban for a group to populate the board
+- [ ] **Manual Testing of Kanban Mode** — user retesting with updated binary
+  - Binary rebuilt to main worktree path (symlink now points to correct binary)
+  - Previous test showed sidebar unresponsive + space not working — was stale binary
+  - Need user to confirm fixes work after rebuild
 
-## Completed This Session (2026-02-28 — Wave 6 + Merge)
+## Completed This Session (2026-03-02 — Session 17: Bug Fixes + Card Redesign)
 
-- [x] Wave 6 tasks 6.1-6.3 (Go code): Conductor lifecycle, zen consensus gates, YOLO UI indicators
-- [x] Wave 6 tasks 7.1-7.4 (Skills): Skipped project-level copies — skills already exist as user-level
-- [x] Quality gates: code-review + security-review (fixed 3 CRITICAL, 4 HIGH, 2 MEDIUM issues)
-  - Fixed race conditions on `currentColumn`, `retryCount`, `ContinuationID` (mutex + getter)
-  - Fixed variable shadowing in `ProgressColumns` (loop var `c` -> `col`)
-  - Fixed `truncateTitle` byte-vs-rune truncation
-  - Added `backoffDelay()` with linear backoff for retry loops
-  - Added `sanitizeLogField()` / `sanitizePromptField()` for log + MCP prompt injection
-- [x] Wave 6 committed as `8796964`
-- [x] Feature branch merged into main worktree (`1dc8cae`)
-  - Resolved conflict: `home.go` — accepted feature branch version (extracted code)
-  - Fixed `ShowDeleteSession` — 4th param `vagrantMode` added to 2 call sites
-- [x] Binary rebuilt from main worktree for manual testing
+- [x] Bug 1: Group filtering — ctrl+k now auto-selects current group in sidebar
+- [x] Bug 2: Sessions with nil KanbanColumn default to Backlog in board + findKanbanCard
+- [x] Bug 3: Space key toggles detail panel (kanbanDetailOpen + case " ": handler)
+- [x] Bug 4: Enter key attaches to session (fixed by nil KanbanColumn handling)
+- [x] Bug 5: Card redesign — bordered boxes with tool badge + selection indicator
+- [x] Fixed binary symlink issue — must build to main worktree path
 
 ## Completed Previous Sessions
 
+- Session 16: Wave 6 — Conductor, Zen Gates, YOLO UI (8796964)
 - Session 15: Wave 5 — Transitions (ef44b0f)
 - Session 14: Wave 4 — Navigation & Detail (26b94dd)
 - Session 13: Wave 3 — Board UI (146dc92)
@@ -38,10 +30,11 @@
 
 ## Pending
 
-- [ ] **Enable kanban for a test group** — run SQL to set `kanban_enabled=1` for a group
+- [ ] **Commit bug fixes** — `feat(kanban): fix group filtering, card styling, key handling`
 - [ ] **Push feature branch to origin** — user will manually create PR after testing
-- [ ] **Uncommitted change on main worktree** — `home.go` has group dialog kanban enablement (not from feature branch)
-- [ ] Extract transition handlers from home.go to kanban_transition_handlers.go (code review suggestion)
+- [ ] **Detail panel rendering** — Space toggles flag but renderKanbanLayout may not render detail panel yet
+- [ ] **Tab focus cycle** — should include PanelDetail when detail is open
+- [ ] Extract transition handlers from home.go to kanban_transition_handlers.go
 - [ ] Add YAML config caching to avoid per-call file I/O (low priority)
 - [ ] `Rollback` method doesn't set `OriginalError` on `RollbackError`
 - [ ] Consider adding `-race` flag to CI test runs

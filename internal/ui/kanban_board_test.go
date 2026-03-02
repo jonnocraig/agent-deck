@@ -36,14 +36,15 @@ func TestRenderKanbanBoard_120Cols(t *testing.T) {
 	lines := strings.Split(result, "\n")
 	assert.Equal(t, height, len(lines), "should have exactly %d lines", height)
 
-	// Verify all 6 column headers are present with correct counts
+	// Verify all 6 column headers are present with full names and correct counts
+	// At width=120 sidebarWidth=30 → boardWidth=90, colWidth=15 → full names (>=14)
 	resultStr := lipgloss.NewStyle().Render(result) // Strip ANSI for checking
-	assert.Contains(t, resultStr, "BL(2)", "should show Backlog with count 2")
-	assert.Contains(t, resultStr, "DE(1)", "should show Design with count 1")
-	assert.Contains(t, resultStr, "PL(0)", "should show Plan with count 0")
-	assert.Contains(t, resultStr, "IM(3)", "should show Implement with count 3")
-	assert.Contains(t, resultStr, "RE(1)", "should show Review with count 1")
-	assert.Contains(t, resultStr, "DO(0)", "should show Done with count 0")
+	assert.Contains(t, resultStr, "Backlog(2)", "should show Backlog with count 2")
+	assert.Contains(t, resultStr, "Design(1)", "should show Design with count 1")
+	assert.Contains(t, resultStr, "Plan(0)", "should show Plan with count 0")
+	assert.Contains(t, resultStr, "Implement(3)", "should show Implement with count 3")
+	assert.Contains(t, resultStr, "Review(1)", "should show Review with count 1")
+	assert.Contains(t, resultStr, "Done(0)", "should show Done with count 0")
 }
 
 // TestRenderKanbanBoard_160Cols tests 6 columns at ~23 chars each
@@ -104,7 +105,7 @@ func TestRenderKanbanBoard_80Cols(t *testing.T) {
 	assert.Contains(t, resultStr, "▶", "should show right scroll indicator")
 }
 
-// TestRenderKanbanBoard_ColumnHeaders tests abbreviated names with card counts
+// TestRenderKanbanBoard_ColumnHeaders tests full names with card counts (wide mode)
 func TestRenderKanbanBoard_ColumnHeaders(t *testing.T) {
 	instances := []*session.Instance{
 		makeKanbanInstance("1", "Task 1", session.KanbanBacklog, 0),
@@ -115,12 +116,12 @@ func TestRenderKanbanBoard_ColumnHeaders(t *testing.T) {
 	width := 120
 	height := 10
 
-	// Test with column 0 (Backlog) selected
+	// Test with column 0 (Backlog) selected — wide mode shows full names
 	var scrollOffsets [6]int
 	result := renderKanbanBoard(instances, width, height, 0, 0, 30, false, 0, scrollOffsets)
-	assert.Contains(t, result, "BL(2)", "should show Backlog count")
-	assert.Contains(t, result, "DE(1)", "should show Design count")
-	assert.Contains(t, result, "PL(0)", "should show Plan count")
+	assert.Contains(t, result, "Backlog(2)", "should show Backlog count")
+	assert.Contains(t, result, "Design(1)", "should show Design count")
+	assert.Contains(t, result, "Plan(0)", "should show Plan count")
 }
 
 // TestRenderKanbanBoard_EmptyBoard tests hint text when no cards in any column
@@ -154,7 +155,7 @@ func TestRenderKanbanBoard_CardsInColumns(t *testing.T) {
 		makeKanbanInstance("3", "Task C", session.KanbanBacklog, 1), // Should be 2nd
 	}
 
-	width := 120
+	width := 180 // Increased width to accommodate bordered cards
 	height := 30
 	selectedCol := 0
 	selectedRow := 0

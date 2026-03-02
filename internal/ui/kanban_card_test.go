@@ -19,13 +19,16 @@ func TestRenderKanbanCard_Compact(t *testing.T) {
 		AutomationMode: session.AutomationInteractive,
 	}
 
-	card := renderKanbanCard(inst, 20, false)
+	card := renderKanbanCard(inst, 25, false)
 	require.NotEmpty(t, card)
 
-	// Should contain status icon and title
+	// Should contain status icon, title, and tool badge
 	assert.Contains(t, card, "Fix login bug")
-	// Should be compact (single line, no multi-line)
-	assert.Equal(t, 0, strings.Count(card, "\n"))
+	assert.Contains(t, card, "cl") // claude badge
+	// Should be 3 lines (border top + content + border bottom)
+	assert.Equal(t, 2, strings.Count(card, "\n"))
+	// Should contain border characters
+	assert.True(t, strings.Contains(card, "╭") || strings.Contains(card, "│") || strings.Contains(card, "╰"))
 }
 
 func TestRenderKanbanCard_StatusIcons(t *testing.T) {
@@ -74,9 +77,15 @@ func TestRenderKanbanCard_Selected(t *testing.T) {
 	// Selected and unselected should render differently
 	assert.NotEqual(t, selected, unselected)
 
-	// Both should contain the title
+	// Both should contain the title, tool badge, and border
 	assert.Contains(t, selected, "Test Session")
 	assert.Contains(t, unselected, "Test Session")
+	assert.Contains(t, selected, "cl")
+	assert.Contains(t, unselected, "cl")
+
+	// Selected should have selection indicator
+	assert.Contains(t, selected, "▶")
+	assert.NotContains(t, unselected, "▶")
 }
 
 func TestRenderKanbanCard_Unselected(t *testing.T) {
@@ -89,10 +98,12 @@ func TestRenderKanbanCard_Unselected(t *testing.T) {
 
 	card := renderKanbanCard(inst, 25, false)
 
-	// Should render the title
+	// Should render the title, status icon, and tool badge
 	assert.Contains(t, card, "Normal Session")
-	// Should contain status icon
 	assert.Contains(t, card, "○")
+	assert.Contains(t, card, "ge") // gemini badge
+	// Should NOT have selection indicator
+	assert.NotContains(t, card, "▶")
 }
 
 func TestRenderKanbanCard_TitleTruncation(t *testing.T) {
@@ -139,9 +150,10 @@ func TestRenderKanbanCard_YOLOIcon(t *testing.T) {
 
 	card := renderKanbanCard(inst, 30, false)
 
-	// Should contain the robot emoji for YOLO mode
+	// Should contain the robot emoji for YOLO mode, title, and tool badge
 	assert.Contains(t, card, "🤖")
 	assert.Contains(t, card, "Autonomous Task")
+	assert.Contains(t, card, "cl")
 }
 
 func TestRenderKanbanCard_NilInstance(t *testing.T) {
@@ -182,7 +194,7 @@ func TestRenderYOLOProgress_AllPending(t *testing.T) {
 
 	// When current column is Backlog, the gear should be on Backlog
 	// and everything after it is pending (dim).
-	result := renderYOLOProgress(session.KanbanBacklog, 80)
+	result := renderYOLOProgress(session.KanbanBacklog)
 	require.NotEmpty(t, result)
 
 	// Backlog should show the gear icon (current)
@@ -208,7 +220,7 @@ func TestRenderYOLOProgress_MidWay(t *testing.T) {
 	// Backlog, Design, Plan should show checkmarks (completed)
 	// Implement should show gear (current)
 	// Review, Done should be pending (dim)
-	result := renderYOLOProgress(session.KanbanImplement, 80)
+	result := renderYOLOProgress(session.KanbanImplement)
 	require.NotEmpty(t, result)
 
 	assert.Contains(t, result, gearIcon)
@@ -220,7 +232,7 @@ func TestRenderYOLOProgress_Complete(t *testing.T) {
 	InitTheme("dark")
 
 	// When current column is Done, all columns should show checkmarks
-	result := renderYOLOProgress(session.KanbanDone, 80)
+	result := renderYOLOProgress(session.KanbanDone)
 	require.NotEmpty(t, result)
 
 	// All should be completed: 6 checkmarks, no gear
@@ -235,7 +247,7 @@ func TestRenderYOLOProgress_FirstColumn(t *testing.T) {
 	InitTheme("dark")
 
 	// First column (Backlog) shows gear, all others pending
-	result := renderYOLOProgress(session.KanbanBacklog, 80)
+	result := renderYOLOProgress(session.KanbanBacklog)
 	require.NotEmpty(t, result)
 
 	// Should have exactly one gear icon
@@ -251,7 +263,7 @@ func TestRenderYOLOProgress_NarrowWidth(t *testing.T) {
 	InitTheme("dark")
 
 	// Should still render without panicking on very narrow widths
-	result := renderYOLOProgress(session.KanbanPlan, 20)
+	result := renderYOLOProgress(session.KanbanPlan)
 	require.NotEmpty(t, result)
 
 	// Should contain at least one column abbreviation
@@ -262,7 +274,7 @@ func TestRenderYOLOProgress_InvalidColumn(t *testing.T) {
 	InitTheme("dark")
 
 	// Invalid column should return a sensible result (all pending)
-	result := renderYOLOProgress(session.KanbanColumn("invalid"), 80)
+	result := renderYOLOProgress(session.KanbanColumn("invalid"))
 	require.NotEmpty(t, result)
 
 	// No checkmarks and no gear for invalid column
@@ -283,7 +295,7 @@ func TestRenderGateStatus_InProgress(t *testing.T) {
 		"o3":                  "pending",
 	}
 
-	result := renderGateStatus(gateStatus, 80)
+	result := renderGateStatus(gateStatus)
 	require.NotEmpty(t, result)
 
 	// Should contain "Gate:" label
@@ -308,7 +320,7 @@ func TestRenderGateStatus_AllPassed(t *testing.T) {
 		"o3":    "passed",
 	}
 
-	result := renderGateStatus(gateStatus, 80)
+	result := renderGateStatus(gateStatus)
 	require.NotEmpty(t, result)
 
 	// All should show passed icon
@@ -329,7 +341,7 @@ func TestRenderGateStatus_Failed(t *testing.T) {
 		"o3":    "pending",
 	}
 
-	result := renderGateStatus(gateStatus, 80)
+	result := renderGateStatus(gateStatus)
 	require.NotEmpty(t, result)
 
 	// Should contain all three icon types
@@ -342,11 +354,11 @@ func TestRenderGateStatus_NoStatus(t *testing.T) {
 	InitTheme("dark")
 
 	// Empty map should return empty string
-	result := renderGateStatus(map[string]string{}, 80)
+	result := renderGateStatus(map[string]string{})
 	assert.Empty(t, result)
 
 	// Nil map should also return empty string
-	result = renderGateStatus(nil, 80)
+	result = renderGateStatus(nil)
 	assert.Empty(t, result)
 }
 
@@ -358,7 +370,7 @@ func TestRenderGateStatus_UnknownModels(t *testing.T) {
 		"custom-model":          "unknown_status",
 	}
 
-	result := renderGateStatus(gateStatus, 80)
+	result := renderGateStatus(gateStatus)
 	require.NotEmpty(t, result)
 
 	// -preview suffix should be stripped
