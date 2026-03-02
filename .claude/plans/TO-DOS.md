@@ -2,38 +2,32 @@
 
 ## In Progress
 
-- [ ] **Kanban Mode Feature** (design: `docs/plans/2026-02-27-kanban-mode-design.md`)
-  - [x] Brainstorm with 5-perspective agent team
-  - [x] Clone and analyze 3 reference repos
-  - [x] Write full design document (737 lines)
-  - [x] Multi-model design review + Phase 0 adoption
-  - [x] Create implementation plan — 28 tasks, 6 waves
-  - [x] Cross-model plan review + TDD enhancement
-  - [x] **Phase 0: Refactor** — home.go decomposed into 7 kanban_*.go files (b80441d)
-  - [x] **Phase 1: Data Layer** — types, schema v2, CRUD, messages, sort order (9b7ea91)
-  - [x] **Phase 2: Board UI** — KanbanBoard, KanbanCard, KanbanSidebar rendering (146dc92)
-  - [x] **Phase 3: Navigation** — KanbanNav 2D cursor, scroll, n/d/m card interactions (26b94dd)
-  - [x] **Phase 4: Detail Panel** — KanbanDetail panel, edit mode (26b94dd)
-  - [x] **Phase 5: Transitions** — TransitionEngine, skill triggers, 3-tier config, rollback (**uncommitted**)
-  - [ ] **Phase 6: Conductor** — YOLO mode, zen consensus gates, conductor lifecycle (**NEXT**)
-  - [ ] **Phase 7: Skills** — 4 new skills (backlog, review, done, self-evolve)
+- [ ] **Manual Testing of Kanban Mode** — ctrl+k to enter kanban mode, need a group with kanban enabled
+  - Feature branch merged into main worktree locally (merge commit `1dc8cae`)
+  - Binary rebuilt at `/Users/jon_ec/code/research/agent-deck/build/agent-deck`
+  - Symlink at `/opt/homebrew/bin/agent-deck` points to that binary
+  - User could not see kanban board — likely because no group has `kanban_enabled=1` in SQLite
+  - Need to enable kanban for a group to populate the board
 
-## Completed This Session (2026-02-28 — Wave 5 Implementation)
+## Completed This Session (2026-02-28 — Wave 6 + Merge)
 
-- [x] Task 5.1: TransitionEngine interface — IsValidMove, RequestMove, error types, TransitionStorage
-- [x] Task 5.2: 3-tier config resolution — SQLite > YAML > defaults, KanbanYAMLConfig, functional options
-- [x] Task 5.3: Skill triggers + rollback — resolveAutoTriggerSkill, Rollback method, message handlers in home.go
-- [x] Quality gates: code-review + security-review (fixed 2 CRITICAL, 3 HIGH, 4 MEDIUM issues)
-  - Fixed nil pointer deref in handleSkillCompleted
-  - Fixed partial write without rollback in RequestMove (extracted executeStorageMove)
-  - Fixed tmux command injection via ValidateSkillName regex
-  - Added SkillName to SkillCompletedMsg
-  - Added YAML config file size limit (1MB)
-  - Added sort order error test + 13 skill name validation tests
-- [x] Wave 5 NOT YET COMMITTED — needs commit
+- [x] Wave 6 tasks 6.1-6.3 (Go code): Conductor lifecycle, zen consensus gates, YOLO UI indicators
+- [x] Wave 6 tasks 7.1-7.4 (Skills): Skipped project-level copies — skills already exist as user-level
+- [x] Quality gates: code-review + security-review (fixed 3 CRITICAL, 4 HIGH, 2 MEDIUM issues)
+  - Fixed race conditions on `currentColumn`, `retryCount`, `ContinuationID` (mutex + getter)
+  - Fixed variable shadowing in `ProgressColumns` (loop var `c` -> `col`)
+  - Fixed `truncateTitle` byte-vs-rune truncation
+  - Added `backoffDelay()` with linear backoff for retry loops
+  - Added `sanitizeLogField()` / `sanitizePromptField()` for log + MCP prompt injection
+- [x] Wave 6 committed as `8796964`
+- [x] Feature branch merged into main worktree (`1dc8cae`)
+  - Resolved conflict: `home.go` — accepted feature branch version (extracted code)
+  - Fixed `ShowDeleteSession` — 4th param `vagrantMode` added to 2 call sites
+- [x] Binary rebuilt from main worktree for manual testing
 
 ## Completed Previous Sessions
 
+- Session 15: Wave 5 — Transitions (ef44b0f)
 - Session 14: Wave 4 — Navigation & Detail (26b94dd)
 - Session 13: Wave 3 — Board UI (146dc92)
 - Session 12: Synced JSON agent plan with MD (6295382)
@@ -44,17 +38,15 @@
 
 ## Pending
 
-- [ ] **Execute Wave 6: Automation & Skills** (7 tasks)
-  - Task 6.1: Conductor lifecycle (kanban_conductor.go)
-  - Task 6.2: Zen consensus gate protocol (kanban_conductor.go)
-  - Task 6.3: YOLO UI indicators (kanban_card.go, kanban_conductor.go)
-  - Tasks 7.1-7.4: 4 new skills (backlog, review, done, self-evolve)
+- [ ] **Enable kanban for a test group** — run SQL to set `kanban_enabled=1` for a group
+- [ ] **Push feature branch to origin** — user will manually create PR after testing
+- [ ] **Uncommitted change on main worktree** — `home.go` has group dialog kanban enablement (not from feature branch)
 - [ ] Extract transition handlers from home.go to kanban_transition_handlers.go (code review suggestion)
 - [ ] Add YAML config caching to avoid per-call file I/O (low priority)
-- [ ] **Implement user profile sync** (design: `.claude/plans/2026-02-22-user-profile-sync-design.md`)
-- [ ] Delete Vagrantfile + `.vagrant/` for fresh VM test
-- [ ] Increase default VM RAM from 4GB to 16GB (`vagrantfile.go:162`)
-- [ ] Upgrade Node.js in VM from 18.x to 20.x
+- [ ] `Rollback` method doesn't set `OriginalError` on `RollbackError`
+- [ ] Consider adding `-race` flag to CI test runs
+- [ ] Remove unused `readLogContent` helper in kanban_conductor_test.go
+- [ ] Remove unused `width` parameter from `renderYOLOProgress` and `renderGateStatus`
 
 ## Blocked
 
