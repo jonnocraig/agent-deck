@@ -235,6 +235,7 @@ type Home struct {
 	kanbanMoveMode      bool                // True when in move mode
 	kanbanMoveTarget    int                 // Target column index for move (0-5)
 	kanbanMoveSource    int                 // Source column index for move (0-5)
+	kanbanDetailOpen    bool                // True when detail panel is visible
 	transitionEngine    TransitionEngine    // Column transition engine (nil-safe)
 	kanbanErrorDisplay  *ErrorDisplayMsg    // Current error with actions (nil when none)
 
@@ -4352,6 +4353,35 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		h.kanbanSelectedCol = 0
 		h.kanbanSelectedRow = 0
 		h.rebuildKanbanSidebar()
+
+		// Preserve group selection: find current group in sidebar and select it
+		if len(h.flatItems) > 0 && h.cursor < len(h.flatItems) {
+			item := h.flatItems[h.cursor]
+			var currentGroupPath string
+
+			// Determine current group path
+			if item.Type == session.ItemTypeGroup {
+				currentGroupPath = item.Path
+			} else if item.Type == session.ItemTypeSession && item.Session != nil {
+				currentGroupPath = item.Session.GroupPath
+			}
+
+			// Find matching group in sidebar (skip "All Sessions" at index 0)
+			if currentGroupPath != "" {
+				for i := 1; i < len(h.kanbanSidebarState.Groups); i++ {
+					if h.kanbanSidebarState.Groups[i].Path == currentGroupPath {
+						h.kanbanSidebarState = KanbanSidebarState{
+							Groups:      h.kanbanSidebarState.Groups,
+							SelectedIdx: i,
+							Focused:     h.kanbanSidebarState.Focused,
+							Height:      h.kanbanSidebarState.Height,
+						}
+						break
+					}
+				}
+			}
+		}
+
 		return h, nil
 
 	case "ctrl+z":
@@ -6250,7 +6280,7 @@ func (h *Home) getKanbanInstancesLocked() []*session.Instance {
 	return result
 }
 
-// renderKanbanLayout renders the full kanban layout: sidebar | board
+// renderKanbanLayout renders the full kanban layout: sidebar | board [| detail]
 func (h *Home) renderKanbanLayout(contentHeight int) string {
 	// Update sidebar height
 	h.kanbanSidebarState.Height = contentHeight
@@ -6267,8 +6297,41 @@ func (h *Home) renderKanbanLayout(contentHeight int) string {
 	}
 	separator := strings.Join(separatorLines, "\n")
 
-	// Render board
+	// Get instances for the board
 	instances := h.getKanbanInstances()
+
+	// If detail panel is open, split width between board (60%) and detail (40%)
+	if h.kanbanDetailOpen {
+		availableWidth := h.width - kanbanSidebarWidth - 1 // -1 for first separator
+		boardWidth := (availableWidth * 60) / 100
+		detailWidth := availableWidth - boardWidth - 1 // -1 for second separator
+
+		// Render board
+		board := renderKanbanBoard(instances, boardWidth, contentHeight, h.kanbanSelectedCol, h.kanbanSelectedRow, 0, h.kanbanMoveMode, h.kanbanMoveTarget, h.kanbanScrollOffsets)
+
+		// Get currently selected card
+		card := h.findKanbanCard(instances)
+
+		// Build detail panel state
+		detailState := KanbanDetailState{
+			Instance: card,
+			Visible:  h.kanbanDetailOpen,
+			Editing:  false, // TODO: wire up editing state when implementing task 4.2
+			Width:    detailWidth,
+			Height:   contentHeight,
+		}
+
+		// Render detail panel
+		detail := renderKanbanDetail(detailState)
+
+		// Join all three panels
+		result := lipgloss.JoinHorizontal(lipgloss.Top, sidebar, separator, board, separator, detail)
+		result = lipgloss.NewStyle().MaxWidth(h.width).Render(result)
+
+		return result
+	}
+
+	// Detail panel closed: render sidebar | board only
 	boardWidth := h.width - kanbanSidebarWidth - 1 // -1 for separator
 	board := renderKanbanBoard(instances, boardWidth, contentHeight, h.kanbanSelectedCol, h.kanbanSelectedRow, 0, h.kanbanMoveMode, h.kanbanMoveTarget, h.kanbanScrollOffsets)
 
@@ -6366,10 +6429,19 @@ func (h *Home) handleKanbanKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return h, nil
 
 	case "tab":
-		// Toggle focus between sidebar and board
-		if h.kanbanFocus == PanelSidebar {
+		// Cycle focus: Sidebar → Board → Detail (if open) → Sidebar
+		switch h.kanbanFocus {
+		case PanelSidebar:
 			h.kanbanFocus = PanelBoard
-		} else {
+		case PanelBoard:
+			if h.kanbanDetailOpen {
+				h.kanbanFocus = PanelDetail
+			} else {
+				h.kanbanFocus = PanelSidebar
+			}
+		case PanelDetail:
+			h.kanbanFocus = PanelSidebar
+		default:
 			h.kanbanFocus = PanelSidebar
 		}
 		h.kanbanSidebarState.Focused = (h.kanbanFocus == PanelSidebar)
@@ -6391,6 +6463,22 @@ func (h *Home) handleKanbanKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if card != nil {
 				return h, h.attachSession(card)
 			}
+		}
+		return h, nil
+
+	case " ":
+		// Toggle detail panel (board only)
+		if h.kanbanFocus == PanelBoard {
+			h.kanbanDetailOpen = !h.kanbanDetailOpen
+			if h.kanbanDetailOpen {
+				h.kanbanFocus = PanelDetail
+			} else {
+				h.kanbanFocus = PanelBoard
+			}
+		} else if h.kanbanFocus == PanelDetail {
+			// Close detail panel when already in detail
+			h.kanbanDetailOpen = false
+			h.kanbanFocus = PanelBoard
 		}
 		return h, nil
 
@@ -6488,13 +6576,16 @@ func (h *Home) handleKanbanKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // findKanbanCard finds the card at the current kanban cursor position
 func (h *Home) findKanbanCard(instances []*session.Instance) *session.Instance {
-	// Group by column
+	// Group by column (treat nil KanbanColumn as Backlog)
 	columnCards := make(map[session.KanbanColumn][]*session.Instance)
 	for _, inst := range instances {
+		var col session.KanbanColumn
 		if inst.KanbanColumn != nil {
-			col := *inst.KanbanColumn
-			columnCards[col] = append(columnCards[col], inst)
+			col = *inst.KanbanColumn
+		} else {
+			col = session.KanbanBacklog
 		}
+		columnCards[col] = append(columnCards[col], inst)
 	}
 
 	// Get the target column

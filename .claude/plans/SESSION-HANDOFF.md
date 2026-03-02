@@ -1,33 +1,40 @@
-# Session Handoff - 2026-02-28 (Session 15 — Wave 5 Transitions Complete, Wave 6 Next)
+# Session Handoff - 2026-03-02 (Session 17 — Bug Fixes + Card Redesign, Manual Testing In Progress)
 
 ## What Was Accomplished This Session
 
-1. **Executed Wave 5: Transitions** (3 tasks, sequential dependency chain)
-   - Task 5.1: TransitionEngine interface (golang-pro agent)
-   - Task 5.2: 3-tier config resolution (golang-pro agent)
-   - Task 5.3: Skill triggers + rollback (golang-pro agent)
-   - Used `agentic-ai-implement` skill with 3 sequential golang-pro agents
+1. **Fixed 5 kanban bugs found during manual testing** (2 parallel agents)
+   - Bug 1: Group filtering — kanban board now auto-selects current group when pressing ctrl+k
+   - Bug 2: Sessions with nil KanbanColumn now default to Backlog in board rendering + findKanbanCard
+   - Bug 3: Space key now toggles detail panel (added `case " ":` handler + `kanbanDetailOpen` field)
+   - Bug 4: Enter key now attaches to session (fixed by Bug 2's nil KanbanColumn handling)
+   - Bug 5: Cards redesigned with rounded borders, tool badge, selection indicator
 
-2. **Quality gates: code-review + security-review** (2 parallel agents)
-   - Found and fixed: 2 CRITICAL, 3 HIGH, 4 MEDIUM issues
-   - Key fixes: nil deref, partial write rollback, tmux command injection, YAML size limit
+2. **Card visual redesign**
+   - Cards now 3-line bordered boxes: `╭──╮ │content│ ╰──╯`
+   - Added tool badge (cl/ge/cx/ai/cu/sh)
+   - Added selection indicator (▶)
+   - cardHeight updated from 1 to 3 in board scroll calculations
 
-3. **Wave 5 deliverables:**
+3. **CRITICAL FIX: Binary symlink issue**
+   - Symlink at `/opt/homebrew/bin/agent-deck` points to **main worktree** binary
+   - Feature worktree build goes to `.worktrees/feature-KanbanMode/build/agent-deck`
+   - Must build with: `go build -o /Users/jon_ec/code/research/agent-deck/build/agent-deck ./cmd/agent-deck/`
+   - Without this override, user runs stale binary
 
-   | File | Change | Lines | Content |
-   |------|--------|-------|---------|
-   | kanban_transition.go | Modified | 535 (+501) | TransitionEngine, DefaultTransitionEngine, 3-tier config, rollback, skill name validation |
-   | kanban_transition_test.go | Created | 800 | 34 tests: validation, moves, errors, config resolution, rollback, skill name validation |
-   | kanban_messages.go | Modified | +1 | Added SkillName to SkillCompletedMsg |
-   | home.go | Modified | +145 | transitionEngine field, init, 4 message handlers, triggerSkillCmd |
-   | go.mod/go.sum | Modified | | yaml.v3 promoted to direct dep |
+4. **Manual testing status — ISSUES REMAINING**
+   - User reported sidebar still unresponsive (can't j/k through groups)
+   - Space key not working
+   - Root cause was stale binary (fixed by rebuilding to correct path)
+   - **Need user to retest with updated binary**
 
 ## Previous Sessions Summary
 
-- **Session 14**: Wave 4 — Nav & Detail (26b94dd, +1,194 lines)
-- **Session 13**: Wave 3 — Board UI (146dc92, +1,194 lines)
+- **Session 16**: Wave 6 — Conductor, Zen Gates, YOLO UI (8796964)
+- **Session 15**: Wave 5 — Transitions (ef44b0f)
+- **Session 14**: Wave 4 — Nav & Detail (26b94dd)
+- **Session 13**: Wave 3 — Board UI (146dc92)
 - **Session 12**: Synced JSON agent plan with MD (6295382)
-- **Session 11**: Wave 2 — Data Layer (9b7ea91, +3,027 lines)
+- **Session 11**: Wave 2 — Data Layer (9b7ea91)
 - **Session 10**: Wave 1 — home.go decomposition (b80441d)
 - **Sessions 7-9**: Kanban brainstorm, design doc, plan enrichment
 - **Sessions 1-6**: Vagrant mode implementation, OAuth, config sync, MCP
@@ -35,78 +42,71 @@
 ## Current State
 
 - **Branch**: `feature/KanbanMode` (worktree at `.worktrees/feature-KanbanMode`)
-- **Last committed**: `26b94dd` — Wave 4 (nav, detail panel, card interactions)
-- **Uncommitted changes**: Wave 5 (transition engine, config resolution, skill triggers)
-- **Tests**: All pass (`go test ./... -count=1 -short` — 16/16 packages)
-- **Build**: Clean (`go build`, `go vet` both pass)
-- **Plan**: 28 tasks, 6 waves — Waves 1-5 done (21 tasks), Wave 6 pending (7 tasks)
+- **Last committed**: `f889660` — docs handoff (Wave 6)
+- **Uncommitted changes**: 5 files, +173/-32 lines (bug fixes + card redesign)
+- **Tests**: All 16 packages pass
+- **Build**: Binary at `/Users/jon_ec/code/research/agent-deck/build/agent-deck` is current (rebuilt to main worktree path)
+- **Symlink**: `/opt/homebrew/bin/agent-deck` → main worktree binary (CORRECT now)
 
 ## Important Context
 
 - **Design doc**: `docs/plans/2026-02-27-kanban-mode-design.md` (source of truth)
-- **Agent plan (JSON)**: `.claude/plans/agent-teams/2026-02-27-kanban-mode-agent-plan.json`
-- **User chose Opus for all tasks** (not optimizing for cost)
-- **Build output**: `go build -o build/agent-deck ./cmd/agent-deck/` (ALWAYS rebuild before testing)
+- **CRITICAL**: Must build to MAIN worktree path for symlink to work:
+  ```bash
+  go build -o /Users/jon_ec/code/research/agent-deck/build/agent-deck ./cmd/agent-deck/
+  ```
+- **Sidebar nav**: Requires Tab to focus sidebar first, then j/k works. Default focus is PanelBoard.
+- **Space key**: Only works when focus is PanelBoard (toggles to PanelDetail). Detail panel rendering may need wiring up in renderKanbanLayout.
 
-### Key Architecture from Wave 5
-- `TransitionEngine` interface: `IsValidMove`, `RequestMove`, `ResolveSkill`, `Rollback`
-- `DefaultTransitionEngine` uses `TransitionStorage` consumer-site interface (4 methods)
-- `NewTransitionEngine(storage, ...opts)` with `WithConfigPath` functional option
-- 3-tier config resolution: SQLite `GetColumnSkillMappings()` > YAML `~/.config/agent-deck/kanban.yaml` > `defaultSkillMappings`
-- `ValidateSkillName` regex prevents tmux command injection (`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
-- `executeStorageMove` rolls back column change on sort order failure (best-effort)
-- `triggerSkillCmd` sends `/<skill-name>` to tmux via `SendKeysAndEnter`
-- `handleExecuteTransition`, `handleSkillCompleted`, `handleRollback`, `handleErrorDisplay` in home.go
+### Key Changes Made (uncommitted)
 
-### Kanban Keyboard Shortcuts
-- **ctrl+k** enters/exits kanban mode
-- **Tab** toggles focus between sidebar, board, detail
-- **1-6** jump to columns, **h/l** navigate columns, **j/k** navigate cards
-- **n** creates new session, **d** deletes session (with confirmation), **m** enters move mode
-- **Space** toggles detail panel, **e** enters edit mode in detail panel
-- **Esc** exits kanban mode / move mode / edit mode
-- All rendering functions are standalone (not `*Home` receivers) for testability
-- Immutable patterns used throughout
+| File | Changes |
+|------|---------|
+| home.go | +kanbanDetailOpen field, ctrl+k auto-selects group, space key handler, findKanbanCard handles nil KanbanColumn |
+| kanban_board.go | renderKanbanBoard handles nil KanbanColumn as Backlog, cardHeight=3 |
+| kanban_card.go | Bordered cards (RoundedBorder), tool badge, selection indicator |
+| kanban_card_test.go | Updated for 3-line cards with borders |
+| kanban_board_test.go | Test width 120→180 for wider cards |
 
-## Wave Execution Summary
+### Known Issues to Investigate
 
-| Wave | Name | Tasks | Status | Commit |
-|------|------|-------|--------|--------|
-| 1 | Foundation | 3 | COMPLETE | b80441d |
-| 2 | Data Layer | 5 | COMPLETE | 9b7ea91 |
-| 3 | Board UI | 4 | COMPLETE | 146dc92 |
-| 4 | Nav & Detail | 6 | COMPLETE | 26b94dd |
-| 5 | Transitions | 3 | COMPLETE | **uncommitted** |
-| 6 | Automation | 7 | **NEXT** | -- |
+1. **Sidebar navigation**: Tab cycles PanelSidebar↔PanelBoard. When sidebar is focused, j/k should work via `updateKanbanSidebarNav`. If still not working after binary rebuild, check if Tab focus switch is reaching the sidebar code path.
+2. **Detail panel**: `kanbanDetailOpen` flag is set by Space, but `renderKanbanLayout` may not yet render the detail panel — check if layout includes detail panel rendering when `kanbanDetailOpen=true`.
+3. **Tab focus cycle**: Currently only PanelSidebar↔PanelBoard, should include PanelDetail when detail is open.
+
+### How to Test
+
+1. Build: `go build -o /Users/jon_ec/code/research/agent-deck/build/agent-deck ./cmd/agent-deck/`
+2. Navigate to a group (e.g., KanbanTests), press ctrl+k
+3. Board should show only that group's sessions in Backlog
+4. Press Tab → sidebar should highlight, j/k should move selection
+5. Press Tab again → board focused, hjkl navigates cards
+6. Press Space → detail panel should appear
+7. Press Enter on a card → should attach to tmux session
+8. Press m → move mode, h/l to pick target column, Enter to confirm
 
 ## Next Steps (in order)
 
-1. **Commit Wave 5** — `feat(kanban): add transition engine, config resolution, and skill triggers`
-2. **Update agent plan JSON** — mark Wave 5 tasks as complete
-3. **Execute Wave 6: Automation & Skills** (7 tasks, high parallelism possible)
-   - Task 6.1: Conductor lifecycle (kanban_conductor.go) — YOLO mode state machine
-   - Task 6.2: Zen consensus gate protocol (kanban_conductor.go) — mcp__zen__consensus integration
-   - Task 6.3: YOLO UI indicators (kanban_card.go, kanban_conductor.go) — visual YOLO badges/progress
-   - Tasks 7.1-7.4: 4 new skills (can run in parallel with 6.1-6.3)
-     - 7.1: agentic-ai-backlog skill
-     - 7.2: agentic-ai-review skill
-     - 7.3: agentic-ai-done skill
-     - 7.4: self-evolve skill
-4. **Commit Wave 6** after quality gates pass
-5. **Create PR** using `superpowers:finishing-a-development-branch`
+1. **User retests with updated binary** — confirms fixes work
+2. **Fix any remaining issues** found during testing
+3. **Commit bug fixes**: `feat(kanban): fix group filtering, card styling, key handling`
+4. **Push feature branch**: `git push origin feature/KanbanMode`
+5. **Create PR** (user preference)
 
-## Code Review Deferred Items (from Wave 5 review)
+## Code Review Deferred Items
 
-- Extract transition handlers from home.go to `kanban_transition_handlers.go` (home.go is 6700+ lines)
-- Add YAML config caching (currently re-reads on every ResolveSkill call)
-- `UpdateInstanceField` in statedb.go uses string interpolation for SQL field names (pre-existing, all callers use hardcoded strings)
+- Extract transition handlers from home.go to `kanban_transition_handlers.go`
+- Add YAML config caching
 - `Rollback` method doesn't set `OriginalError` on `RollbackError`
+- Add `-race` to CI test runs
+- Remove unused `readLogContent` helper in kanban_conductor_test.go
+- Remove unused `width` param from `renderYOLOProgress` and `renderGateStatus`
 
 ## Commands to Run First
 
 ```bash
+go build -o /Users/jon_ec/code/research/agent-deck/build/agent-deck ./cmd/agent-deck/  # rebuild to MAIN worktree path!
 go test ./... -count=1 -short                          # verify tests pass
-go build -o build/agent-deck ./cmd/agent-deck/         # rebuild binary
-wc -l internal/ui/kanban_*.go                          # check kanban file sizes
-git status                                             # see uncommitted Wave 5 changes
+git diff --stat                                         # see uncommitted changes
+git log --oneline -5                                   # verify commits
 ```

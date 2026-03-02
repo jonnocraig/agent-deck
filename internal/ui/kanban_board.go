@@ -695,13 +695,16 @@ func renderKanbanBoard(instances []*session.Instance, width, height, selectedCol
 		return renderEmptyKanbanBoard(width, height)
 	}
 
-	// Group instances by column
+	// Group instances by column (treat nil KanbanColumn as Backlog)
 	columnCards := make(map[session.KanbanColumn][]*session.Instance)
 	for _, inst := range instances {
+		var col session.KanbanColumn
 		if inst.KanbanColumn != nil {
-			col := *inst.KanbanColumn
-			columnCards[col] = append(columnCards[col], inst)
+			col = *inst.KanbanColumn
+		} else {
+			col = session.KanbanBacklog
 		}
+		columnCards[col] = append(columnCards[col], inst)
 	}
 
 	// Sort each column by KanbanSortOrder
@@ -747,6 +750,9 @@ func renderKanbanBoard(instances []*session.Instance, width, height, selectedCol
 		colIdx := col.Index()
 		colSelected := (colIdx == selectedCol)
 		colName := kanbanColumnAbbrev[col]
+		if colWidth >= 14 {
+			colName = kanbanColumnNames[col]
+		}
 		totalCount := len(allCards)
 		isMoveTarget := moveMode && (colIdx == moveTargetCol)
 
@@ -755,7 +761,7 @@ func renderKanbanBoard(instances []*session.Instance, width, height, selectedCol
 
 		// Calculate visible card range (height - 1 for header)
 		contentHeight := height - 1
-		cardHeight := 1 // Compact cards are 1 line each
+		cardHeight := 3 // Bordered cards are 3 lines (top border + content + bottom border)
 		start, end := CalculateVisibleCardRange(totalCount, scrollOffset, contentHeight, cardHeight)
 
 		// Slice cards to visible range

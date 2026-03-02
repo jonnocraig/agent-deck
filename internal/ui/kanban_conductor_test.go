@@ -1033,15 +1033,6 @@ func TestConductorLogEntry_Format(t *testing.T) {
 	assert.Contains(t, formatted, "consensus reached")
 }
 
-// --- Utility for reading log content in tests ---
-
-func readLogContent(t *testing.T, path string) string {
-	t.Helper()
-	data, err := os.ReadFile(path)
-	require.NoError(t, err)
-	return string(data)
-}
-
 // --- Verify GateResult struct ---
 
 func TestGateResult(t *testing.T) {
