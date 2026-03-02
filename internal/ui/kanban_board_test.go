@@ -234,6 +234,60 @@ func TestRenderKanbanColumnHeader(t *testing.T) {
 	}
 }
 
+// TestRenderKanbanBoard_NilKanbanColumn tests that instances with nil KanbanColumn appear in Backlog
+func TestRenderKanbanBoard_NilKanbanColumn(t *testing.T) {
+	now := time.Now()
+	instanceWithNilColumn := &session.Instance{
+		ID:              "nil-col-1",
+		Title:           "No Column Session",
+		Tool:            "claude",
+		Status:          session.StatusIdle,
+		CreatedAt:       now,
+		KanbanColumn:    nil, // Explicitly nil
+		KanbanSortOrder: 0,
+	}
+
+	instances := []*session.Instance{instanceWithNilColumn}
+
+	width := 120
+	height := 30
+	selectedCol := 0
+	selectedRow := 0
+	sidebarWidth := 30
+
+	var scrollOffsets [6]int
+	result := renderKanbanBoard(instances, width, height, selectedCol, selectedRow, sidebarWidth, false, 0, scrollOffsets)
+
+	// Verify the result contains Backlog(1), proving the nil-column instance landed in Backlog
+	resultStr := lipgloss.NewStyle().Render(result)
+	assert.Contains(t, resultStr, "Backlog(1)", "instance with nil KanbanColumn should appear in Backlog column")
+}
+
+// TestRenderKanbanBoard_NarrowColumnAbbreviations tests abbreviated column names at narrow width
+func TestRenderKanbanBoard_NarrowColumnAbbreviations(t *testing.T) {
+	instances := []*session.Instance{
+		makeKanbanInstance("1", "Task 1", session.KanbanBacklog, 0),
+		makeKanbanInstance("2", "Task 2", session.KanbanDesign, 0),
+	}
+
+	// Use width=40, sidebarWidth=0 → boardWidth=40
+	// In narrow mode (<= 80), shows 3 columns → colWidth = 40/3 = 13
+	// colWidth < 14 triggers abbreviated names
+	width := 40
+	height := 30
+	selectedCol := 0
+	selectedRow := 0
+	sidebarWidth := 0
+
+	var scrollOffsets [6]int
+	result := renderKanbanBoard(instances, width, height, selectedCol, selectedRow, sidebarWidth, false, 0, scrollOffsets)
+
+	// Verify abbreviated names appear (BL, DE, etc.) instead of full names
+	resultStr := lipgloss.NewStyle().Render(result)
+	assert.Contains(t, resultStr, "BL(", "should use abbreviated name BL for Backlog at narrow width")
+	assert.Contains(t, resultStr, "DE(", "should use abbreviated name DE for Design at narrow width")
+}
+
 // Helper function to create kanban instances for testing
 func makeKanbanInstance(id, title string, col session.KanbanColumn, sortOrder int) *session.Instance {
 	now := time.Now()

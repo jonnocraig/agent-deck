@@ -1294,3 +1294,139 @@ func TestKanbanKey_D_EmptyColumn(t *testing.T) {
 		t.Error("pressing d in empty column should not show confirmation dialog")
 	}
 }
+
+// TestHomeKanbanSpace_OpensDetail tests space key opens detail panel from board
+func TestHomeKanbanSpace_OpensDetail(t *testing.T) {
+	home := NewHome()
+	home.width = 120
+	home.height = 40
+	home.initialLoading = false
+	home.kanbanMode = true
+	home.kanbanFocus = PanelBoard
+	home.kanbanDetailOpen = false
+	home.rebuildKanbanSidebar()
+
+	// Press space to open detail panel
+	msg := tea.KeyMsg{Type: tea.KeySpace}
+	model, _ := home.Update(msg)
+	h := model.(*Home)
+
+	if !h.kanbanDetailOpen {
+		t.Error("space key should open detail panel")
+	}
+	if h.kanbanFocus != PanelDetail {
+		t.Errorf("focus should switch to PanelDetail, got %d", h.kanbanFocus)
+	}
+}
+
+// TestHomeKanbanSpace_ClosesDetail tests space key closes detail panel when in detail
+func TestHomeKanbanSpace_ClosesDetail(t *testing.T) {
+	home := NewHome()
+	home.width = 120
+	home.height = 40
+	home.initialLoading = false
+	home.kanbanMode = true
+	home.kanbanFocus = PanelDetail
+	home.kanbanDetailOpen = true
+	home.rebuildKanbanSidebar()
+
+	// Press space to close detail panel
+	msg := tea.KeyMsg{Type: tea.KeySpace}
+	model, _ := home.Update(msg)
+	h := model.(*Home)
+
+	if h.kanbanDetailOpen {
+		t.Error("space key should close detail panel when in detail")
+	}
+	if h.kanbanFocus != PanelBoard {
+		t.Errorf("focus should return to PanelBoard, got %d", h.kanbanFocus)
+	}
+}
+
+// TestHomeKanbanSpace_NoOpOnSidebar tests space key has no effect when focus is on sidebar
+func TestHomeKanbanSpace_NoOpOnSidebar(t *testing.T) {
+	home := NewHome()
+	home.width = 120
+	home.height = 40
+	home.initialLoading = false
+	home.kanbanMode = true
+	home.kanbanFocus = PanelSidebar
+	home.kanbanDetailOpen = false
+	home.rebuildKanbanSidebar()
+
+	// Press space while focus is on sidebar
+	msg := tea.KeyMsg{Type: tea.KeySpace}
+	model, _ := home.Update(msg)
+	h := model.(*Home)
+
+	// Detail should remain closed, focus should stay on sidebar
+	if h.kanbanDetailOpen {
+		t.Error("space key should not open detail when focus is on sidebar")
+	}
+	if h.kanbanFocus != PanelSidebar {
+		t.Errorf("focus should remain PanelSidebar, got %d", h.kanbanFocus)
+	}
+}
+
+// TestHomeKanbanTab_BoardToDetail tests Tab key switches from board to detail when detail is open
+func TestHomeKanbanTab_BoardToDetail(t *testing.T) {
+	home := NewHome()
+	home.width = 120
+	home.height = 40
+	home.initialLoading = false
+	home.kanbanMode = true
+	home.kanbanFocus = PanelBoard
+	home.kanbanDetailOpen = true
+	home.rebuildKanbanSidebar()
+
+	// Press Tab to switch focus
+	msg := tea.KeyMsg{Type: tea.KeyTab}
+	model, _ := home.Update(msg)
+	h := model.(*Home)
+
+	if h.kanbanFocus != PanelDetail {
+		t.Errorf("Tab should switch to PanelDetail, got %d", h.kanbanFocus)
+	}
+}
+
+// TestHomeKanbanTab_DetailToSidebar tests Tab key switches from detail to sidebar
+func TestHomeKanbanTab_DetailToSidebar(t *testing.T) {
+	home := NewHome()
+	home.width = 120
+	home.height = 40
+	home.initialLoading = false
+	home.kanbanMode = true
+	home.kanbanFocus = PanelDetail
+	home.kanbanDetailOpen = true
+	home.rebuildKanbanSidebar()
+
+	// Press Tab to switch focus
+	msg := tea.KeyMsg{Type: tea.KeyTab}
+	model, _ := home.Update(msg)
+	h := model.(*Home)
+
+	if h.kanbanFocus != PanelSidebar {
+		t.Errorf("Tab should switch to PanelSidebar, got %d", h.kanbanFocus)
+	}
+}
+
+// TestHomeKanbanTab_BoardToSidebarWhenDetailClosed tests Tab key skips detail when closed
+func TestHomeKanbanTab_BoardToSidebarWhenDetailClosed(t *testing.T) {
+	home := NewHome()
+	home.width = 120
+	home.height = 40
+	home.initialLoading = false
+	home.kanbanMode = true
+	home.kanbanFocus = PanelBoard
+	home.kanbanDetailOpen = false
+	home.rebuildKanbanSidebar()
+
+	// Press Tab to switch focus
+	msg := tea.KeyMsg{Type: tea.KeyTab}
+	model, _ := home.Update(msg)
+	h := model.(*Home)
+
+	if h.kanbanFocus != PanelSidebar {
+		t.Errorf("Tab should switch directly to PanelSidebar when detail is closed, got %d", h.kanbanFocus)
+	}
+}
