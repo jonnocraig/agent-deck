@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -15,7 +16,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -27,8 +30,9 @@ import (
 )
 
 var (
-	sessionLog = logging.ForComponent(logging.CompSession)
-	mcpLog     = logging.ForComponent(logging.CompMCP)
+	sessionLog                  = logging.ForComponent(logging.CompSession)
+	mcpLog                      = logging.ForComponent(logging.CompMCP)
+	codexSessionIDPathPatternRE = regexp.MustCompile(`/.codex/sessions/\S*/rollout-\S*-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl`)
 )
 
 // Status represents the current state of a session
@@ -158,6 +162,10 @@ const (
 	codexHookWaitingFastPathWindow = 2 * time.Minute
 	codexBootstrapScanInterval     = 2 * time.Second
 	codexRotationScanInterval      = 30 * time.Second
+	// codexProbeScanInterval rate-limits process-file probing to avoid
+	// repeated /proc and lsof scans on every status tick.
+	codexProbeScanInterval    = 2 * time.Second
+	codexProbeMissingSentinel = "__AGENT_DECK_MISSING_TOOL__"
 )
 
 // Instance represents a single agent/shell session
@@ -199,10 +207,14 @@ type Instance struct {
 	OpenCodeStartedAt  int64     `json:"-"` // Unix millis when we started OpenCode (for session matching, not persisted)
 
 	// Codex CLI integration
-	CodexSessionID  string    `json:"codex_session_id,omitempty"`
-	CodexDetectedAt time.Time `json:"codex_detected_at,omitempty"`
-	CodexStartedAt  int64     `json:"-"` // Unix millis when we started Codex (for session matching, not persisted)
-	lastCodexScanAt time.Time // Rate-limits expensive ~/.codex/sessions scans
+	CodexSessionID   string    `json:"codex_session_id,omitempty"`
+	CodexDetectedAt  time.Time `json:"codex_detected_at,omitempty"`
+	CodexStartedAt   int64     `json:"-"` // Unix millis when we started Codex (for session matching, not persisted)
+	lastCodexScanAt  time.Time // Rate-limits expensive ~/.codex/sessions scans
+	lastCodexProbeAt time.Time // Rate-limits expensive Codex process-file probes
+	// pendingCodexRestartWarning is consumed by UI/CLI after Restart() succeeds.
+	// It is intentionally transient and never persisted.
+	pendingCodexRestartWarning string `json:"-"`
 
 	// Latest user input for context (extracted from session files)
 	LatestPrompt      string    `json:"latest_prompt,omitempty"`
@@ -216,6 +228,10 @@ type Instance struct {
 	// Docker sandbox support.
 	Sandbox          *SandboxConfig `json:"sandbox,omitempty"`
 	SandboxContainer string         `json:"sandbox_container,omitempty"` // Container name when running in sandbox.
+
+	// SSH remote support
+	SSHHost       string `json:"ssh_host,omitempty"`
+	SSHRemotePath string `json:"ssh_remote_path,omitempty"`
 
 	// MCP tracking - which MCPs were loaded when session started/restarted
 	// Used to detect pending MCPs (added after session start) and stale MCPs (removed but still running)
@@ -297,6 +313,11 @@ type SandboxConfig struct {
 // IsSandboxed returns true if this instance is configured to run in a Docker sandbox.
 func (inst *Instance) IsSandboxed() bool {
 	return inst.Sandbox != nil && inst.Sandbox.Enabled
+}
+
+// IsSSH returns true if this instance runs on a remote host via SSH.
+func (inst *Instance) IsSSH() bool {
+	return inst.SSHHost != ""
 }
 
 // NewSandboxConfig builds a SandboxConfig from CLI flags and user settings.
@@ -1058,7 +1079,10 @@ func (i *Instance) detectCodexSessionAsync() {
 			time.Sleep(delay)
 		}
 
-		sessionID := i.queryCodexSession(i.collectOtherCodexSessionIDs(), true)
+		sessionID, _ := i.queryCodexSessionFromProcessFiles()
+		if sessionID == "" {
+			sessionID = i.queryCodexSession(i.collectOtherCodexSessionIDs(), true)
+		}
 		if sessionID != "" {
 			i.CodexSessionID = sessionID
 			i.CodexDetectedAt = time.Now()
@@ -1313,12 +1337,298 @@ func (i *Instance) shouldScanCodexSession(allowUnscoped bool) bool {
 	return true
 }
 
+// shouldRunCodexProcessProbe returns whether we should run Codex process/file
+// probing right now.
+func (i *Instance) shouldRunCodexProcessProbe(force bool) bool {
+	if force {
+		i.lastCodexProbeAt = time.Now()
+		return true
+	}
+
+	if !i.lastCodexProbeAt.IsZero() && time.Since(i.lastCodexProbeAt) < codexProbeScanInterval {
+		return false
+	}
+
+	i.lastCodexProbeAt = time.Now()
+	return true
+}
+
+// collectTmuxPaneProcessTreePIDs returns pane PID + descendant PIDs for this instance.
+func (i *Instance) collectTmuxPaneProcessTreePIDs() []int {
+	if i.tmuxSession == nil || !i.tmuxSession.Exists() {
+		return nil
+	}
+
+	target := i.tmuxSession.Name + ":"
+	out, err := exec.Command("tmux", "list-panes", "-t", target, "-F", "#{pane_pid}").Output()
+	if err != nil {
+		return nil
+	}
+
+	pidStr := strings.TrimSpace(string(out))
+	if idx := strings.IndexByte(pidStr, '\n'); idx >= 0 {
+		pidStr = pidStr[:idx]
+	}
+	panePID, err := strconv.Atoi(pidStr)
+	if err != nil || panePID <= 0 {
+		return nil
+	}
+
+	// Single snapshot of the process table is substantially cheaper than
+	// spawning pgrep once per node in deep process trees.
+	procTable, err := exec.Command("ps", "-eo", "pid=,ppid=").Output()
+	if err == nil {
+		if allPIDs := collectProcessTreePIDsFromTable(panePID, procTable); len(allPIDs) > 0 {
+			return allPIDs
+		}
+	}
+
+	// Fallback path for environments where ps output is unavailable/unexpected.
+	return collectProcessTreePIDsViaPgrep(panePID)
+}
+
+func collectProcessTreePIDsFromTable(rootPID int, procTable []byte) []int {
+	childrenByParent := parsePSParentChildMap(procTable)
+	if len(childrenByParent) == 0 {
+		return []int{rootPID}
+	}
+
+	var allPIDs []int
+	seen := map[int]bool{rootPID: true}
+	queue := []int{rootPID}
+	for len(queue) > 0 {
+		parent := queue[0]
+		queue = queue[1:]
+		allPIDs = append(allPIDs, parent)
+
+		for _, childPID := range childrenByParent[parent] {
+			if childPID <= 0 || seen[childPID] {
+				continue
+			}
+			seen[childPID] = true
+			queue = append(queue, childPID)
+		}
+	}
+	return allPIDs
+}
+
+func parsePSParentChildMap(procTable []byte) map[int][]int {
+	childrenByParent := make(map[int][]int)
+	scanner := bufio.NewScanner(bytes.NewReader(procTable))
+	for scanner.Scan() {
+		fields := strings.Fields(scanner.Text())
+		if len(fields) != 2 {
+			continue
+		}
+		pid, err := strconv.Atoi(fields[0])
+		if err != nil || pid <= 0 {
+			continue
+		}
+		ppid, err := strconv.Atoi(fields[1])
+		if err != nil || ppid <= 0 {
+			continue
+		}
+		childrenByParent[ppid] = append(childrenByParent[ppid], pid)
+	}
+	return childrenByParent
+}
+
+func collectProcessTreePIDsViaPgrep(rootPID int) []int {
+	var allPIDs []int
+	seen := map[int]bool{rootPID: true}
+	queue := []int{rootPID}
+	for len(queue) > 0 {
+		parent := queue[0]
+		queue = queue[1:]
+		allPIDs = append(allPIDs, parent)
+
+		childrenRaw, err := exec.Command("pgrep", "-P", strconv.Itoa(parent)).Output()
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(strings.TrimSpace(string(childrenRaw)), "\n") {
+			childPID, convErr := strconv.Atoi(strings.TrimSpace(line))
+			if convErr != nil || childPID <= 0 || seen[childPID] {
+				continue
+			}
+			seen[childPID] = true
+			queue = append(queue, childPID)
+		}
+	}
+	return allPIDs
+}
+
+func isLikelyCodexProcessPID(pid int) bool {
+	argsOut, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "args=").Output()
+	if err != nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(strings.TrimSpace(string(argsOut))), "codex")
+}
+
+func extractCodexSessionIDFromPath(path string) string {
+	normalized := strings.TrimSpace(path)
+	normalized = strings.TrimSuffix(normalized, " (deleted)")
+	matches := codexSessionIDPathPatternRE.FindStringSubmatch(normalized)
+	if len(matches) < 2 {
+		return ""
+	}
+	return matches[1]
+}
+
+func extractCodexSessionIDFromLsofOutput(output []byte) string {
+	scanner := bufio.NewScanner(bytes.NewReader(output))
+	for scanner.Scan() {
+		if sessionID := extractCodexSessionIDFromPath(scanner.Text()); sessionID != "" {
+			return sessionID
+		}
+	}
+	return ""
+}
+
+func extractCodexSessionIDFromProcFD(pid int) string {
+	fdDir := filepath.Join("/proc", strconv.Itoa(pid), "fd")
+	entries, err := os.ReadDir(fdDir)
+	if err != nil {
+		return ""
+	}
+
+	for _, entry := range entries {
+		targetPath := filepath.Join(fdDir, entry.Name())
+		target, err := os.Readlink(targetPath)
+		if err != nil {
+			continue
+		}
+		if sessionID := extractCodexSessionIDFromPath(target); sessionID != "" {
+			return sessionID
+		}
+	}
+	return ""
+}
+
+func (i *Instance) queryCodexSessionFromHostProcFD() string {
+	for _, pid := range i.collectTmuxPaneProcessTreePIDs() {
+		if !isLikelyCodexProcessPID(pid) {
+			continue
+		}
+		if sessionID := extractCodexSessionIDFromProcFD(pid); sessionID != "" {
+			return sessionID
+		}
+	}
+	return ""
+}
+
+func (i *Instance) queryCodexSessionFromDockerProcFD() (string, string) {
+	if strings.TrimSpace(i.SandboxContainer) == "" {
+		return "", ""
+	}
+
+	script := fmt.Sprintf(
+		`command -v readlink >/dev/null 2>&1 || {
+	echo %q
+	exit 0
+}
+for f in /proc/[0-9]*/fd/*; do
+	t=$(readlink "$f" 2>/dev/null || true)
+	case "$t" in
+		*/.codex/sessions/*rollout-*.jsonl*)
+			printf '%%s\n' "$t"
+			;;
+	esac
+done`,
+		codexProbeMissingSentinel,
+	)
+	out, err := exec.Command("docker", "exec", i.SandboxContainer, "sh", "-lc", script).Output()
+	if err != nil {
+		return "", ""
+	}
+	if bytes.Contains(out, []byte(codexProbeMissingSentinel)) {
+		return "", "readlink"
+	}
+	if sessionID := extractCodexSessionIDFromLsofOutput(out); sessionID != "" {
+		return sessionID, ""
+	}
+	return "", ""
+}
+
+func (i *Instance) queryCodexSessionFromHostLsof() (string, string) {
+	if _, err := exec.LookPath("lsof"); err != nil {
+		return "", "lsof"
+	}
+
+	for _, pid := range i.collectTmuxPaneProcessTreePIDs() {
+		if !isLikelyCodexProcessPID(pid) {
+			continue
+		}
+
+		out, err := exec.Command("lsof", "-p", strconv.Itoa(pid)).Output()
+		if err != nil {
+			var execErr *exec.Error
+			if errors.As(err, &execErr) && execErr.Err == exec.ErrNotFound {
+				return "", "lsof"
+			}
+			sessionLog.Debug("codex_lsof_probe_failed", slog.Int("pid", pid), slog.Any("error", err))
+			continue
+		}
+
+		if sessionID := extractCodexSessionIDFromLsofOutput(out); sessionID != "" {
+			return sessionID, ""
+		}
+	}
+
+	return "", ""
+}
+
+// queryCodexSessionFromProcessFiles inspects live Codex processes and returns
+// the active session UUID inferred from open rollout JSONL files.
+// The second return value is the missing dependency name (if any).
+func (i *Instance) queryCodexSessionFromProcessFiles() (string, string) {
+	// Sandboxed sessions run Codex inside Docker; probe container /proc.
+	if i.IsSandboxed() {
+		return i.queryCodexSessionFromDockerProcFD()
+	}
+
+	// Linux/WSL: pure in-process /proc scanning (no lsof dependency).
+	if runtime.GOOS == "linux" {
+		if sessionID := i.queryCodexSessionFromHostProcFD(); sessionID != "" {
+			return sessionID, ""
+		}
+		return "", ""
+	}
+
+	// Non-Linux (e.g. macOS): fallback to lsof compatibility path.
+	return i.queryCodexSessionFromHostLsof()
+}
+
+// ConsumeCodexRestartWarning returns and clears any pending Codex restart warning.
+func (i *Instance) ConsumeCodexRestartWarning() string {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	warning := strings.TrimSpace(i.pendingCodexRestartWarning)
+	i.pendingCodexRestartWarning = ""
+	return warning
+}
+
+func codexProbeMissingWarning(missingDep string) string {
+	missingDep = strings.TrimSpace(missingDep)
+	if missingDep == "" {
+		return ""
+	}
+	return fmt.Sprintf("Codex session detection fallback: %s is not available", missingDep)
+}
+
 // UpdateCodexSession updates the Codex session ID.
 // Primary source: tmux environment.
 // Fallback: project-aware filesystem scan.
 func (i *Instance) UpdateCodexSession(excludeIDs map[string]bool) {
+	i.updateCodexSession(excludeIDs, false)
+}
+
+// updateCodexSession refreshes Codex session ID from env/process-files/disk.
+// Returns missing dependency name when probe prerequisites are unavailable.
+func (i *Instance) updateCodexSession(excludeIDs map[string]bool, forceProbe bool) string {
 	if i.Tool != "codex" {
-		return
+		return ""
 	}
 
 	envSessionID := ""
@@ -1334,11 +1644,34 @@ func (i *Instance) UpdateCodexSession(excludeIDs map[string]bool) {
 		}
 	}
 
-	// 2. Detect same-project session rotation (e.g. /new) from disk.
+	// 2. Prefer live-process file detection (Linux /proc, macOS lsof fallback).
+	missingProbeDep := ""
+	if i.shouldRunCodexProcessProbe(forceProbe) {
+		if sessionID, missingDep := i.queryCodexSessionFromProcessFiles(); sessionID != "" {
+			changed := sessionID != i.CodexSessionID
+			if changed {
+				sessionLog.Debug(
+					"codex_session_update_from_probe",
+					slog.String("old_id", i.CodexSessionID),
+					slog.String("new_id", sessionID),
+				)
+			}
+			i.CodexSessionID = sessionID
+			i.CodexDetectedAt = time.Now()
+			if i.tmuxSession != nil && i.tmuxSession.Exists() && (changed || envSessionID == "") {
+				_ = i.tmuxSession.SetEnvironment("CODEX_SESSION_ID", i.CodexSessionID)
+			}
+			return ""
+		} else if missingDep != "" {
+			missingProbeDep = missingDep
+		}
+	}
+
+	// 3. Detect same-project session rotation (e.g. /new) from disk.
 	// Only allow unscoped fallback when we don't have a known session ID yet.
 	allowUnscoped := envSessionID == "" && i.CodexSessionID == "" && i.CodexStartedAt > 0
 	if !i.shouldScanCodexSession(allowUnscoped) {
-		return
+		return missingProbeDep
 	}
 
 	if sessionID := i.queryCodexSession(excludeIDs, allowUnscoped); sessionID != "" {
@@ -1359,6 +1692,7 @@ func (i *Instance) UpdateCodexSession(excludeIDs map[string]bool) {
 			_ = i.tmuxSession.SetEnvironment("CODEX_SESSION_ID", i.CodexSessionID)
 		}
 	}
+	return missingProbeDep
 }
 
 // buildGenericCommand builds commands for custom tools defined in [tools.*]
@@ -3519,7 +3853,15 @@ func (i *Instance) Restart() error {
 	// For Codex: ALWAYS update session to get the most recent one
 	// Krudony fix: don't skip when we already have an ID - the user may have started a NEW session
 	if i.Tool == "codex" {
-		i.UpdateCodexSession(nil)
+		i.mu.Lock()
+		i.pendingCodexRestartWarning = ""
+		i.mu.Unlock()
+		if missingDep := i.updateCodexSession(nil, true); missingDep != "" {
+			i.mu.Lock()
+			i.pendingCodexRestartWarning = codexProbeMissingWarning(missingDep)
+			i.mu.Unlock()
+			sessionLog.Warn("codex_probe_dep_missing_for_restart", slog.String("dependency", missingDep))
+		}
 	}
 
 	// If Codex session AND tmux session exists, use respawn-pane
@@ -4494,6 +4836,37 @@ func (i *Instance) OpenContainerShell() (string, error) {
 	return tmuxName, nil
 }
 
+// wrapForSSH wraps the command in an SSH invocation if the instance targets a remote host.
+// Uses ControlMaster for connection multiplexing to avoid repeated handshakes.
+func (i *Instance) wrapForSSH(command string) string {
+	if !i.IsSSH() {
+		return command
+	}
+
+	// Ensure ControlMaster socket directory exists
+	sshDir := "/tmp/agent-deck-ssh"
+	_ = os.MkdirAll(sshDir, 0700)
+
+	remoteCmd := command
+	if i.SSHRemotePath != "" {
+		// Escape single quotes in the remote path and command
+		escapedPath := strings.ReplaceAll(i.SSHRemotePath, "'", "'\\''")
+		escapedCmd := strings.ReplaceAll(command, "'", "'\\''")
+		remoteCmd = fmt.Sprintf("cd '%s' && %s", escapedPath, escapedCmd)
+	}
+
+	return fmt.Sprintf(
+		"ssh -t -o ControlMaster=auto -o ControlPath=/tmp/agent-deck-ssh/%%r@%%h:%%p -o ControlPersist=600 %s %s",
+		shellQuote(i.SSHHost),
+		shellQuote(remoteCmd),
+	)
+}
+
+// shellQuote wraps a string in single quotes, escaping embedded single quotes.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+}
+
 // wrapForSandbox wraps command in docker exec if the instance is sandboxed.
 // Returns the wrapped command and the container name. The caller is responsible
 // for persisting the container name to i.SandboxContainer.
@@ -4523,6 +4896,7 @@ func (i *Instance) prepareCommand(cmd string) (string, string, error) {
 	if err != nil {
 		return "", "", err
 	}
+	wrapped = i.wrapForSSH(wrapped)
 	wrapped, containerName, err := i.wrapForSandbox(wrapped)
 	if err != nil {
 		return "", "", err

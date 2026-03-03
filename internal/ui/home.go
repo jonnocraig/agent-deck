@@ -53,6 +53,11 @@ const (
 	// At 2s: 2-5 CapturePane() calls/sec = minimal CPU overhead
 	tickInterval = 2 * time.Second
 
+	// logOutputDebounce limits how often a single session can trigger
+	// UpdateStatus() from tmux %output events.
+	// A higher value avoids expensive status parsing loops for very chatty sessions
+	logOutputDebounce = 2 * time.Second
+
 	// Launch animation minimum durations.
 	// Claude/Gemini get longer feedback because startup UI is richer and may settle asynchronously.
 	minLaunchAnimationDurationDefault = 500 * time.Millisecond
@@ -313,6 +318,12 @@ type Home struct {
 	// UI state persistence across restarts
 	pendingCursorRestore *uiState // Consumed on first loadSessionsMsg to restore cursor
 	uiStateSaveTicks     int      // Counter for periodic UI state saves in tick handler
+
+	// Remote sessions (Phase 2: Agent-Deck Remotes)
+	remoteSessions     map[string][]session.RemoteSessionInfo // remoteName -> sessions
+	remoteSessionsMu   sync.RWMutex
+	lastRemoteFetch    time.Time // When remote sessions were last fetched
+	remotesFetchActive bool      // Prevents overlapping fetches
 }
 
 // reloadState preserves UI state during storage reload
@@ -441,6 +452,11 @@ type sendOutputResultMsg struct {
 	targetTitle string
 	lineCount   int
 	err         error
+}
+
+// remoteSessionsFetchedMsg is sent when async remote sessions fetch completes.
+type remoteSessionsFetchedMsg struct {
+	sessions map[string][]session.RemoteSessionInfo
 }
 
 // systemThemeMsg is sent when the OS dark mode setting changes.
@@ -590,7 +606,7 @@ func NewHomeWithProfileAndMode(profile string) *Home {
 			if inst.GetTmuxSession() != nil && inst.GetTmuxSession().Name == sessionName {
 				h.logActivityMu.Lock()
 				lastUpdate := h.lastLogActivity[inst.ID]
-				if time.Since(lastUpdate) < 500*time.Millisecond {
+				if time.Since(lastUpdate) < logOutputDebounce {
 					h.logActivityMu.Unlock()
 					break
 				}
@@ -935,6 +951,40 @@ func (h *Home) rebuildFlatItems() {
 		h.flatItems = allItems
 	}
 
+	// Append remote sessions as selectable items
+	h.remoteSessionsMu.RLock()
+	remoteNames := make([]string, 0, len(h.remoteSessions))
+	remotes := make(map[string][]session.RemoteSessionInfo, len(h.remoteSessions))
+	for name, sessions := range h.remoteSessions {
+		remoteNames = append(remoteNames, name)
+		remotes[name] = append([]session.RemoteSessionInfo(nil), sessions...)
+	}
+	h.remoteSessionsMu.RUnlock()
+	sort.Strings(remoteNames)
+	if len(remotes) > 0 {
+		for _, remoteName := range remoteNames {
+			sessions := remotes[remoteName]
+			// Add remote group header
+			h.flatItems = append(h.flatItems, session.Item{
+				Type:       session.ItemTypeRemoteGroup,
+				RemoteName: remoteName,
+				Path:       "remotes/" + remoteName,
+				Level:      0,
+			})
+			// Add remote sessions
+			for i := range sessions {
+				h.flatItems = append(h.flatItems, session.Item{
+					Type:          session.ItemTypeRemoteSession,
+					RemoteSession: &sessions[i],
+					RemoteName:    remoteName,
+					Path:          "remotes/" + remoteName,
+					Level:         1,
+					IsLastInGroup: i == len(sessions)-1,
+				})
+			}
+		}
+	}
+
 	// Pre-compute root group numbers for O(1) hotkey lookup (replaces O(n) loop in renderGroupItem)
 	rootNum := 0
 	for i := range h.flatItems {
@@ -1192,6 +1242,7 @@ func (h *Home) Init() tea.Cmd {
 
 		h.tick(),
 		h.checkForUpdate(),
+		h.fetchRemoteSessions,
 	}
 
 	// Start listening for storage changes
@@ -1255,6 +1306,32 @@ func (h *Home) startThemeWatcher() tea.Cmd {
 		return nil
 	}
 	return listenForThemeChange(h.themeWatcher)
+}
+
+// fetchRemoteSessions fetches sessions from all configured remotes.
+func (h *Home) fetchRemoteSessions() tea.Msg {
+	config, err := session.LoadUserConfig()
+	if err != nil || config == nil || len(config.Remotes) == 0 {
+		return remoteSessionsFetchedMsg{sessions: nil}
+	}
+
+	results := make(map[string][]session.RemoteSessionInfo)
+	ctx, cancel := context.WithTimeout(h.ctx, 15*time.Second)
+	defer cancel()
+
+	for name, rc := range config.Remotes {
+		runner := session.NewSSHRunner(name, rc)
+		sessions, err := runner.FetchSessions(ctx)
+		if err != nil {
+			continue
+		}
+		for i := range sessions {
+			sessions[i].RemoteName = name
+		}
+		results[name] = sessions
+	}
+
+	return remoteSessionsFetchedMsg{sessions: results}
 }
 
 // loadSessions loads sessions from storage and initializes the pool
@@ -2593,6 +2670,10 @@ func (h *Home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Push to undo stack before removing from group tree
 		if deletedInstance != nil {
 			h.pushUndoStack(deletedInstance)
+			// Save to recent sessions for quick re-creation
+			if err := h.storage.SaveRecentSession(deletedInstance); err != nil {
+				uiLog.Warn("save_recent_session_err", slog.String("id", msg.deletedID), slog.String("err", err.Error()))
+			}
 		}
 
 		// Invalidate status counts cache
@@ -2674,7 +2755,11 @@ func (h *Home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Use forceSave to bypass mtime check - restore MUST persist
 		h.forceSaveInstances()
-		h.setError(fmt.Errorf("restored '%s'", msg.instance.Title))
+		if msg.warning != "" {
+			h.setError(fmt.Errorf("restored '%s' (%s)", msg.instance.Title, msg.warning))
+		} else {
+			h.setError(fmt.Errorf("restored '%s'", msg.instance.Title))
+		}
 		return h, h.fetchPreview(msg.instance)
 
 	case openCodeDetectionCompleteMsg:
@@ -2720,6 +2805,9 @@ func (h *Home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			h.invalidatePreviewCache(msg.sessionID)
 			// Save the updated session state (new tmux session name)
 			h.saveInstances()
+			if msg.warning != "" {
+				h.setError(fmt.Errorf("%s", msg.warning))
+			}
 		}
 		// Clear animation so ENTER can attach immediately.
 		delete(h.resumingSessions, msg.sessionID)
@@ -2743,6 +2831,15 @@ func (h *Home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case updateCheckMsg:
 		h.updateInfo = msg.info
+		return h, nil
+
+	case remoteSessionsFetchedMsg:
+		h.remoteSessionsMu.Lock()
+		h.remoteSessions = msg.sessions
+		h.lastRemoteFetch = time.Now()
+		h.remotesFetchActive = false
+		h.remoteSessionsMu.Unlock()
+		h.rebuildFlatItems()
 		return h, nil
 
 	case MaintenanceCompleteMsg:
@@ -3172,6 +3269,8 @@ func (h *Home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return h.handleErrorDisplay(msg)
 
 	case tickMsg:
+		var remoteFetchCmd tea.Cmd
+
 		// Auto-dismiss errors after 5 seconds
 		if h.err != nil && !h.errTime.IsZero() && time.Since(h.errTime) > 5*time.Second {
 			h.clearError()
@@ -3208,6 +3307,17 @@ func (h *Home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if h.uiStateSaveTicks >= 5 {
 			h.uiStateSaveTicks = 0
 			h.saveUIState()
+		}
+
+		// Periodic remote session fetch (every 30 seconds)
+		h.remoteSessionsMu.RLock()
+		shouldFetch := !h.remotesFetchActive && time.Since(h.lastRemoteFetch) >= 30*time.Second
+		h.remoteSessionsMu.RUnlock()
+		if shouldFetch {
+			h.remoteSessionsMu.Lock()
+			h.remotesFetchActive = true
+			h.remoteSessionsMu.Unlock()
+			remoteFetchCmd = h.fetchRemoteSessions
 		}
 
 		// Fast log size check every 10 seconds (catches runaway logs before they cause issues)
@@ -3285,7 +3395,7 @@ func (h *Home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			h.previewCacheMu.Unlock()
 		}
-		return h, tea.Batch(h.tick(), previewCmd)
+		return h, tea.Batch(h.tick(), previewCmd, remoteFetchCmd)
 
 	case globalSearchDebounceMsg, globalSearchResultsMsg:
 		// Route async global search messages to the global search component
@@ -3581,6 +3691,13 @@ func (h *Home) getCurrentGroupPath() string {
 
 // handleNewDialogKey handles keys when new dialog is visible
 func (h *Home) handleNewDialogKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// When the recent sessions picker is open, let the dialog handle all keys first.
+	if h.newDialog.IsRecentPickerOpen() {
+		var cmd tea.Cmd
+		h.newDialog, cmd = h.newDialog.Update(msg)
+		return h, cmd
+	}
+
 	switch msg.String() {
 	case "enter":
 		// Validate before creating session
@@ -3846,6 +3963,9 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					}
 				}
 				h.saveGroupState()
+			} else if item.Type == session.ItemTypeRemoteSession && item.RemoteSession != nil {
+				// Attach to remote session via SSH
+				return h, h.attachRemoteSession(item.RemoteName, item.RemoteSession.ID)
 			}
 		}
 		return h, nil
@@ -4094,6 +4214,8 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				h.groupDialog.ShowRename(item.Path, item.Group.Name)
 			} else if item.Type == session.ItemTypeSession && item.Session != nil {
 				h.groupDialog.ShowRenameSession(item.Session.ID, item.Session.Title)
+			} else if item.Type == session.ItemTypeRemoteSession && item.RemoteSession != nil {
+				h.groupDialog.ShowRenameSession("remote:"+item.RemoteName+":"+item.RemoteSession.ID, item.RemoteSession.Title)
 			}
 		}
 		return h, nil
@@ -4192,6 +4314,11 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			paths[i] = info.path
 		}
 		h.newDialog.SetPathSuggestions(paths)
+
+		// Load recent sessions for the picker
+		if recents, err := h.storage.LoadRecentSessions(); err == nil {
+			h.newDialog.SetRecentSessions(recents)
+		}
 
 		// Apply user's preferred default tool from config
 		h.newDialog.SetDefaultTool(session.GetDefaultTool())
@@ -4395,7 +4522,11 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		inst := entry.instance
 		return h, func() tea.Msg {
 			err := inst.Restart()
-			return sessionRestoredMsg{instance: inst, err: err}
+			return sessionRestoredMsg{
+				instance: inst,
+				err:      err,
+				warning:  inst.ConsumeCodexRestartWarning(),
+			}
 		}
 
 	case "ctrl+r":
@@ -4823,20 +4954,56 @@ func (h *Home) handleGroupDialogKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			newName := h.groupDialog.GetValue()
 			if newName != "" {
 				sessionID := h.groupDialog.GetSessionID()
-				// Find and rename the session (O(1) lookup)
-				if inst := h.getInstanceByID(sessionID); inst != nil {
-					inst.Title = newName
-					inst.SyncTmuxDisplayName()
+
+				// Handle remote session rename
+				if strings.HasPrefix(sessionID, "remote:") {
+					parts := strings.SplitN(sessionID, ":", 3) // "remote", remoteName, actualID
+					if len(parts) == 3 {
+						remoteName, remoteID := parts[1], parts[2]
+						go func() {
+							config, err := session.LoadUserConfig()
+							if err != nil || config == nil || config.Remotes == nil {
+								return
+							}
+							rc, ok := config.Remotes[remoteName]
+							if !ok {
+								return
+							}
+							runner := session.NewSSHRunner(remoteName, rc)
+							ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+							defer cancel()
+							_, _ = runner.RunCommand(ctx, "rename", remoteID, newName)
+						}()
+						// Update local cache immediately for responsiveness
+						h.remoteSessionsMu.Lock()
+						if sessions, ok := h.remoteSessions[remoteName]; ok {
+							for i := range sessions {
+								if sessions[i].ID == parts[2] {
+									sessions[i].Title = newName
+									break
+								}
+							}
+						}
+						h.remoteSessionsMu.Unlock()
+						h.rebuildFlatItems()
+					}
+				} else {
+					// Local session rename
+					// Find and rename the session (O(1) lookup)
+					if inst := h.getInstanceByID(sessionID); inst != nil {
+						inst.Title = newName
+						inst.SyncTmuxDisplayName()
+					}
+					// Store pending title change so it survives reload races.
+					// If saveInstances() is skipped (isReloading=true), the reload
+					// replaces h.instances from disk, losing the in-memory rename.
+					// loadSessionsMsg re-applies pending changes after reload.
+					h.pendingTitleChanges[sessionID] = newName
+					// Invalidate preview cache since title changed
+					h.invalidatePreviewCache(sessionID)
+					h.rebuildFlatItems()
+					h.saveInstances()
 				}
-				// Store pending title change so it survives reload races.
-				// If saveInstances() is skipped (isReloading=true), the reload
-				// replaces h.instances from disk, losing the in-memory rename.
-				// loadSessionsMsg re-applies pending changes after reload.
-				h.pendingTitleChanges[sessionID] = newName
-				// Invalidate preview cache since title changed
-				h.invalidatePreviewCache(sessionID)
-				h.rebuildFlatItems()
-				h.saveInstances()
 			}
 		}
 		h.groupDialog.Hide()
@@ -5539,6 +5706,7 @@ type sessionDeletedMsg struct {
 type sessionRestoredMsg struct {
 	instance *session.Instance
 	err      error
+	warning  string
 }
 
 // deleteSession deletes a session
@@ -5561,6 +5729,7 @@ func (h *Home) deleteSession(inst *session.Instance) tea.Cmd {
 type sessionRestartedMsg struct {
 	sessionID string
 	err       error
+	warning   string
 }
 
 // mcpRestartedMsg signals that an MCP-triggered restart completed and should auto-attach
@@ -5594,7 +5763,11 @@ func (h *Home) restartSession(inst *session.Instance) tea.Cmd {
 
 		err := current.Restart()
 		mcpUILog.Debug("restart_session_result", slog.String("id", id), slog.Any("error", err))
-		return sessionRestartedMsg{sessionID: id, err: err}
+		return sessionRestartedMsg{
+			sessionID: id,
+			err:       err,
+			warning:   current.ConsumeCodexRestartWarning(),
+		}
 	}
 }
 
@@ -5704,6 +5877,38 @@ func (a attachCmd) Run() error {
 func (a attachCmd) SetStdin(r io.Reader)  {}
 func (a attachCmd) SetStdout(w io.Writer) {}
 func (a attachCmd) SetStderr(w io.Writer) {}
+
+// attachRemoteSession attaches to a remote session via SSH, suspending the TUI.
+func (h *Home) attachRemoteSession(remoteName, sessionID string) tea.Cmd {
+	config, err := session.LoadUserConfig()
+	if err != nil || config == nil || config.Remotes == nil {
+		return nil
+	}
+	rc, ok := config.Remotes[remoteName]
+	if !ok {
+		return nil
+	}
+	runner := session.NewSSHRunner(remoteName, rc)
+	h.isAttaching.Store(true)
+	return tea.Exec(remoteAttachCmd{runner: runner, sessionID: sessionID}, func(err error) tea.Msg {
+		h.isAttaching.Store(false)
+		return statusUpdateMsg{}
+	})
+}
+
+// remoteAttachCmd implements tea.ExecCommand for remote SSH attach
+type remoteAttachCmd struct {
+	runner    *session.SSHRunner
+	sessionID string
+}
+
+func (r remoteAttachCmd) Run() error {
+	return r.runner.Attach(r.sessionID)
+}
+
+func (r remoteAttachCmd) SetStdin(reader io.Reader)  {}
+func (r remoteAttachCmd) SetStdout(writer io.Writer) {}
+func (r remoteAttachCmd) SetStderr(writer io.Writer) {}
 
 // importSessions imports existing tmux sessions
 func (h *Home) importSessions() tea.Msg {
@@ -6070,6 +6275,168 @@ func (h *Home) View() string {
 		MaxHeight(h.height).
 		Render(result)
 }
+
+
+// renderRemotePreview renders the preview pane for a remote group or session
+func (h *Home) renderRemotePreview(item session.Item, width, height int) string {
+	if item.Type == session.ItemTypeRemoteGroup {
+		h.remoteSessionsMu.RLock()
+		count := 0
+		if sessions, ok := h.remoteSessions[item.RemoteName]; ok {
+			count = len(sessions)
+		}
+		h.remoteSessionsMu.RUnlock()
+
+		config, _ := session.LoadUserConfig()
+		host := item.RemoteName
+		if config != nil && config.Remotes != nil {
+			if rc, ok := config.Remotes[item.RemoteName]; ok {
+				host = rc.Host
+			}
+		}
+
+		return renderEmptyStateResponsive(EmptyStateConfig{
+			Icon:     "⬡",
+			Title:    "Remote: " + item.RemoteName,
+			Subtitle: fmt.Sprintf("Host: %s — %d sessions", host, count),
+			Hints:    []string{"Press Enter on a session to attach via SSH"},
+		}, width, height)
+	}
+
+	// Remote session preview
+	rs := item.RemoteSession
+	if rs == nil {
+		return ""
+	}
+
+	var b strings.Builder
+	nameStyle := lipgloss.NewStyle().Bold(true).Foreground(ColorAccent)
+	b.WriteString(nameStyle.Render(rs.Title))
+	b.WriteString("  ")
+
+	statusColor := ColorTextDim
+	statusIcon := "○"
+	switch rs.Status {
+	case "running":
+		statusIcon = "●"
+		statusColor = ColorGreen
+	case "waiting":
+		statusIcon = "◐"
+		statusColor = ColorYellow
+	case "error":
+		statusIcon = "✗"
+		statusColor = ColorRed
+	}
+	b.WriteString(lipgloss.NewStyle().Foreground(statusColor).Render(statusIcon + " " + rs.Status))
+	b.WriteString("\n\n")
+
+	dimStyle := lipgloss.NewStyle().Foreground(ColorTextDim)
+	b.WriteString(dimStyle.Render("Remote:  ") + item.RemoteName + "\n")
+	b.WriteString(dimStyle.Render("Path:    ") + rs.Path + "\n")
+	if rs.Tool != "" {
+		b.WriteString(dimStyle.Render("Tool:    ") + rs.Tool + "\n")
+	}
+	if rs.Group != "" {
+		b.WriteString(dimStyle.Render("Group:   ") + rs.Group + "\n")
+	}
+	b.WriteString("\n")
+	b.WriteString(dimStyle.Render("Press Enter to attach via SSH"))
+
+	return b.String()
+}
+
+// renderRemoteGroupItem renders a remote group header (e.g., "remotes/dev")
+func (h *Home) renderRemoteGroupItem(b *strings.Builder, item session.Item, selected bool) {
+	// Count sessions for this remote
+	h.remoteSessionsMu.RLock()
+	count := 0
+	if sessions, ok := h.remoteSessions[item.RemoteName]; ok {
+		count = len(sessions)
+	}
+	h.remoteSessionsMu.RUnlock()
+
+	nameStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Bold(true) // yellow
+	countStyle := DimStyle
+	expandIcon := "▾"
+	selPrefix := "  "
+	if selected {
+		nameStyle = GroupNameSelStyle
+		countStyle = GroupCountSelStyle
+		selPrefix = "▶ "
+	}
+
+	b.WriteString(fmt.Sprintf("%s%s %s%s\n",
+		selPrefix,
+		expandIcon,
+		nameStyle.Render("remotes/"+item.RemoteName),
+		countStyle.Render(fmt.Sprintf(" (%d)", count)),
+	))
+}
+
+// renderRemoteSessionItem renders a single remote session row
+func (h *Home) renderRemoteSessionItem(b *strings.Builder, item session.Item, selected bool) {
+	rs := item.RemoteSession
+	if rs == nil {
+		return
+	}
+
+	statusIcon := "○"
+	statusColor := lipgloss.Color("8") // gray
+	switch rs.Status {
+	case "running":
+		statusIcon = "●"
+		statusColor = lipgloss.Color("2") // green
+	case "waiting":
+		statusIcon = "◉"
+		statusColor = lipgloss.Color("3") // yellow
+	case "idle":
+		statusIcon = "○"
+		statusColor = lipgloss.Color("8")
+	case "error":
+		statusIcon = "✗"
+		statusColor = lipgloss.Color("1") // red
+	}
+
+	sStyle := lipgloss.NewStyle().Foreground(statusColor)
+	titleStyle := lipgloss.NewStyle().Foreground(ColorText)
+	if selected {
+		sStyle = SessionStatusSelStyle
+		titleStyle = SessionStatusSelStyle
+	}
+
+	titleStr := rs.Title
+	if len(titleStr) > 25 {
+		titleStr = titleStr[:22] + "..."
+	}
+
+	toolStr := ""
+	if rs.Tool != "" {
+		tStyle := DimStyle
+		if selected {
+			tStyle = SessionStatusSelStyle
+		}
+		toolStr = tStyle.Render(" " + rs.Tool)
+	}
+
+	treeConnector := "├─"
+	if item.IsLastInGroup {
+		treeConnector = "└─"
+	}
+
+	selPrefix := "  "
+	if selected {
+		selPrefix = "▶ "
+	}
+
+	b.WriteString(fmt.Sprintf("%s  %s %s %s%s\n",
+		selPrefix,
+		DimStyle.Render(treeConnector),
+		sStyle.Render(statusIcon),
+		titleStyle.Render(titleStr),
+		toolStr,
+	))
+}
+
 
 
 // handleSessionPickerDialogKey handles key events when the session picker is visible.

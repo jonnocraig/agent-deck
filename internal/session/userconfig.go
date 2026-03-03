@@ -109,8 +109,39 @@ type UserConfig struct {
 	// Docker defines Docker sandbox settings for containerized sessions
 	Docker DockerSettings `toml:"docker"`
 
+	// Remotes defines named SSH remote agent-deck instances
+	Remotes map[string]RemoteConfig `toml:"remotes"`
+
 	// Vagrant defines Vagrant VM settings for vagrant mode
 	Vagrant VagrantSettings `toml:"vagrant"`
+}
+
+// RemoteConfig defines a remote agent-deck instance accessible via SSH.
+type RemoteConfig struct {
+	// Host is the SSH destination (e.g., "user@host" or "user@host:port")
+	Host string `toml:"host"`
+
+	// AgentDeckPath is the path to agent-deck binary on the remote (default: "agent-deck")
+	AgentDeckPath string `toml:"agent_deck_path"`
+
+	// Profile is the remote profile to use (default: "default")
+	Profile string `toml:"profile"`
+}
+
+// GetAgentDeckPath returns the agent-deck binary path, defaulting to "agent-deck".
+func (rc RemoteConfig) GetAgentDeckPath() string {
+	if rc.AgentDeckPath != "" {
+		return rc.AgentDeckPath
+	}
+	return "agent-deck"
+}
+
+// GetProfile returns the remote profile, defaulting to "default".
+func (rc RemoteConfig) GetProfile() string {
+	if rc.Profile != "" {
+		return rc.Profile
+	}
+	return "default"
 }
 
 // ProfileSettings defines per-profile configuration overrides.
@@ -525,7 +556,10 @@ type WorktreeSettings struct {
 	DefaultLocation string `toml:"default_location"`
 
 	// PathTemplate: custom path template for worktree location.
-	// Variables: {repo-name}, {repo-root}, {branch}, {session-id}
+	// Variables:
+	//   {repo-name}, {repo-root}, {session-id}
+	//   {branch}         -> sanitized (human-friendly, may collide)
+	//   {branch-escaped} -> URL-escaped (collision-resistant, reversible)
 	// Unknown variables like {foo} are left as-is in the path.
 	// If set, overrides DefaultLocation.
 	PathTemplate *string `toml:"path_template"`
@@ -1500,7 +1534,10 @@ default_location = "sibling"
 # Automatically remove worktree when session is deleted
 auto_cleanup = true
 # Custom path template (overrides default_location if set)
-# Variables: {repo-name}, {repo-root}, {branch}, {session-id}
+# Variables:
+#   {repo-name}, {repo-root}, {session-id}
+#   {branch}         -> sanitized (human-friendly, may collide)
+#   {branch-escaped} -> URL-escaped (collision-resistant, reversible)
 # path_template = "../worktrees/{repo-name}/{branch}"
 
 # Default scope for MCP operations: "local", "global", or "user"

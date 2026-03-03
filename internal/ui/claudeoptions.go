@@ -24,6 +24,7 @@ type ClaudeOptionsPanel struct {
 	useVagrantMode       bool
 	// Focus tracking
 	focusIndex int
+	focusCount int
 	// Whether this panel is for fork dialog (fewer options)
 	isForkMode bool
 }
@@ -57,6 +58,28 @@ func (p *ClaudeOptionsPanel) SetDefaults(config *session.UserConfig) {
 		p.skipPermissions = config.Claude.GetDangerousMode()
 		p.allowSkipPermissions = config.Claude.AllowDangerousMode
 	}
+}
+
+// SetFromOptions applies persisted ClaudeOptions to the panel fields.
+func (p *ClaudeOptionsPanel) SetFromOptions(opts *session.ClaudeOptions) {
+	if opts == nil {
+		return
+	}
+	switch opts.SessionMode {
+	case "continue":
+		p.sessionMode = 1
+	case "resume":
+		p.sessionMode = 2
+		p.resumeIDInput.SetValue(opts.ResumeSessionID)
+	default:
+		p.sessionMode = 0
+	}
+	p.skipPermissions = opts.SkipPermissions
+	p.allowSkipPermissions = opts.AllowSkipPermissions
+	p.useChrome = opts.UseChrome
+	p.useTeammateMode = opts.UseTeammateMode
+	p.updateInputFocus()
+	p.focusCount = p.getFocusCount()
 }
 
 // Focus sets focus to this panel

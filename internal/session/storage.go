@@ -90,6 +90,10 @@ type InstanceData struct {
 	AcceptCriteria  string         `json:"accept_criteria,omitempty"`
 	AutomationMode  AutomationMode `json:"automation_mode,omitempty"`
 	YOLOConfig      *YOLOConfig    `json:"yolo_config,omitempty"`
+
+	// SSH remote support
+	SSHHost       string `json:"ssh_host,omitempty"`
+	SSHRemotePath string `json:"ssh_remote_path,omitempty"`
 }
 
 // GroupData represents serializable group data
@@ -288,6 +292,7 @@ func (s *Storage) SaveWithGroups(instances []*Instance, groupTree *GroupTree) er
 			inst.CodexSessionID, inst.CodexDetectedAt,
 			inst.LatestPrompt, inst.LoadedMCPNames,
 			inst.ToolOptionsJSON,
+			inst.SSHHost, inst.SSHRemotePath,
 		)
 
 		// Convert kanban fields
@@ -461,7 +466,8 @@ func (s *Storage) LoadLite() ([]*InstanceData, []*GroupData, error) {
 			opencodeSID, opencodeAt,
 			codexSID, codexAt,
 			latestPrompt, loadedMCPs,
-			toolOpts := statedb.UnmarshalToolData(r.ToolData)
+			toolOpts,
+			sshHost2, sshRemotePath2 := statedb.UnmarshalToolData(r.ToolData)
 
 		// Convert kanban fields
 		var kanbanCol *KanbanColumn
@@ -523,6 +529,8 @@ func (s *Storage) LoadLite() ([]*InstanceData, []*GroupData, error) {
 			AcceptCriteria:     r.AcceptCriteria,
 			AutomationMode:     automationMode,
 			YOLOConfig:         yoloConfig,
+			SSHHost:            sshHost2,
+			SSHRemotePath:      sshRemotePath2,
 		}
 	}
 
@@ -573,7 +581,8 @@ func (s *Storage) LoadWithGroups() ([]*Instance, []*GroupData, error) {
 			opencodeSID, opencodeAt,
 			codexSID, codexAt,
 			latestPrompt, loadedMCPs,
-			toolOpts := statedb.UnmarshalToolData(r.ToolData)
+			toolOpts,
+			sshHost, sshRemotePath := statedb.UnmarshalToolData(r.ToolData)
 
 		// Convert kanban fields
 		var kanbanCol *KanbanColumn
@@ -635,6 +644,8 @@ func (s *Storage) LoadWithGroups() ([]*Instance, []*GroupData, error) {
 			AcceptCriteria:     r.AcceptCriteria,
 			AutomationMode:     automationMode,
 			YOLOConfig:         yoloConfig,
+			SSHHost:            sshHost,
+			SSHRemotePath:      sshRemotePath,
 		}
 	}
 
@@ -651,6 +662,42 @@ func (s *Storage) LoadWithGroups() ([]*Instance, []*GroupData, error) {
 	}
 
 	return s.convertToInstances(data)
+}
+
+// SaveRecentSession captures a deleted session's config for quick re-creation.
+func (s *Storage) SaveRecentSession(inst *Instance) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.db == nil {
+		return fmt.Errorf("storage database not initialized")
+	}
+
+	row := &statedb.RecentSessionRow{
+		Title:          inst.Title,
+		ProjectPath:    inst.ProjectPath,
+		GroupPath:      inst.GroupPath,
+		Command:        inst.Command,
+		Wrapper:        inst.Wrapper,
+		Tool:           inst.Tool,
+		ToolOptions:    inst.ToolOptionsJSON,
+		SandboxEnabled: inst.Sandbox != nil,
+		GeminiYoloMode: inst.GeminiYoloMode,
+	}
+
+	return s.db.SaveRecentSession(row)
+}
+
+// LoadRecentSessions returns recently deleted session configs for the picker.
+func (s *Storage) LoadRecentSessions() ([]*statedb.RecentSessionRow, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.db == nil {
+		return nil, fmt.Errorf("storage database not initialized")
+	}
+
+	return s.db.LoadRecentSessions()
 }
 
 // GetDBPathForProfile returns the path to the state.db file for a specific profile.
@@ -799,6 +846,8 @@ func (s *Storage) convertToInstances(data *StorageData) ([]*Instance, []*GroupDa
 			AcceptCriteria:     instData.AcceptCriteria,
 			AutomationMode:     instData.AutomationMode,
 			YOLOConfig:         instData.YOLOConfig,
+			SSHHost:            instData.SSHHost,
+			SSHRemotePath:      instData.SSHRemotePath,
 			tmuxSession:        tmuxSess,
 		}
 
@@ -1009,7 +1058,9 @@ func (s *Storage) GetSessionsByColumn(column KanbanColumn) ([]*Instance, error) 
 				opencodeSID, opencodeAt,
 				codexSID, codexAt,
 				latestPrompt, loadedMCPs,
-				toolOpts := statedb.UnmarshalToolData(r.ToolData)
+				toolOpts,
+				sshHost3, sshRemotePath3 := statedb.UnmarshalToolData(r.ToolData)
+			_, _ = sshHost3, sshRemotePath3 // SSH fields not used in kanban column listing
 
 			var kanbanCol *KanbanColumn
 			if r.KanbanColumn != nil {
